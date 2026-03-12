@@ -1,0 +1,40 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# PyInstaller output
+*.spec
+dist_pyinstaller/
+
+# Input data (do not commit real data)
+input/
+output/
+*.xlsx
+*.csv
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE settings
+.vscode/
+.idea/
+*.suo
+*.user
+
+# Logs
+*.log
