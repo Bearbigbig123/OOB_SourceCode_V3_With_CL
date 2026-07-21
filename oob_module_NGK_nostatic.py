@@ -14,6 +14,8 @@ import traceback
 from CL_limit_class import CLTightenCalculator
 # Translation System
 from translations import TranslationManager, get_translator, tr
+from customer_filter import apply_customer_filter, discover_customers
+from chart_filter import filter_chart_information
 # Excel 和圖片處理
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as OpenpyxlImage
@@ -611,6 +613,8 @@ def preprocess_data(chart_info, raw_df):
         columns_to_keep = ['point_val', 'point_time']
         if 'Batch_ID' in raw_df.columns:
             columns_to_keep.append('Batch_ID')
+        if 'Customer' in raw_df.columns:
+            columns_to_keep.append('Customer')
         raw_df = raw_df[columns_to_keep]
         
         
@@ -2350,6 +2354,11 @@ def plot_spc_chart_interactive(raw_df, chart_info, weekly_start_date, weekly_end
                 tooltip_text = f"Batch ID: {batch_id}\nTime: {time_str}\nValue: {value:.3f}"
             else:
                 tooltip_text = f"Time: {time_str}\nValue: {value:.3f}"
+
+            if 'Customer' in raw_df.columns:
+                customer = raw_df['Customer'].iloc[index]
+                if pd.notna(customer) and str(customer).strip():
+                    tooltip_text = f"Customer: {str(customer).strip()}\n{tooltip_text}"
             
             # 如果這個點有違規，添加 WE rule 資訊
             if index in violation_info:
@@ -2680,6 +2689,11 @@ def plot_weekly_spc_chart_interactive(raw_df, chart_info, weekly_start_date, wee
                 tooltip_text = f"Batch ID: {batch_id}\nTime: {time_str}\nValue: {value:.3f}"
             else:
                 tooltip_text = f"Time: {time_str}\nValue: {value:.3f}"
+
+            if 'Customer' in df_weekly.columns:
+                customer = row['Customer']
+                if pd.notna(customer) and str(customer).strip():
+                    tooltip_text = f"Customer: {str(customer).strip()}\n{tooltip_text}"
             
             # 如果這個點有違規，添加 WE rule 資訊
             if index in violated_info:
@@ -2866,6 +2880,10 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         self.raw_data_directory = resource_path('input/raw_charts/')
         self.image_path = resource_path('image.png')
         self.results = []
+        self.available_customers = []
+        self.selected_customers = set()  # Empty means all customers.
+        self.selected_chart_keys = None  # None means health check has not limited the scope.
+        self._customer_missing_warning_shown = False
 
         # 翻譯系統
         self.translator = get_translator()
@@ -3184,6 +3202,18 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         self.lang_button.clicked.connect(self.toggle_language)
         self.left_menu_layout.addWidget(self.lang_button, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
 
+        self.customer_filter_button = QtWidgets.QPushButton()
+        self.customer_filter_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.customer_filter_button.setToolTip("Select one or more Customers for all analyses")
+        self.customer_filter_button.setStyleSheet("""
+            QPushButton { background-color: white; color: #000957; border-radius: 7px;
+                          padding: 7px 8px; text-align: left; font-size: 12px; }
+            QPushButton:hover { background-color: #eef2ff; }
+        """)
+        self.customer_filter_button.clicked.connect(self.open_customer_filter_dialog)
+        self.left_menu_layout.addWidget(self.customer_filter_button)
+        self.refresh_customer_filter(scan=True, show_messages=False)
+
         # 分隔線優化 (使用半透明白色，融合感更好)
         separator = QtWidgets.QFrame()
         separator.setFrameShape(QtWidgets.QFrame.Shape.HLine)
@@ -3383,6 +3413,117 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         return widget
 
     # --- 新增輔助方法用於建立選單按鈕 ---
+    def get_selected_customers(self):
+        return set(self.selected_customers)
+
+    def get_selected_chart_keys(self):
+        return None if self.selected_chart_keys is None else set(self.selected_chart_keys)
+
+    def set_selected_chart_keys(self, selected_chart_keys):
+        self.selected_chart_keys = set(selected_chart_keys)
+
+    def filter_chart_information(self, chart_info):
+        return filter_chart_information(chart_info, self.selected_chart_keys)
+
+    def ensure_charts_selected(self):
+        if self.selected_chart_keys is not None and not self.selected_chart_keys:
+            QtWidgets.QMessageBox.warning(
+                self, tr("chart_scope", "Analysis Scope"),
+                tr("no_charts_selected", "No charts are selected. Select at least one chart in Data Health Monitor."))
+            return False
+        return True
+
+    def filter_customer_data(self, dataframe, source_name="data"):
+        result = apply_customer_filter(dataframe, self.selected_customers)
+        if result.missing_column:
+            print(f"[Customer Filter] Skipped {source_name}: missing Customer column")
+            if not self._customer_missing_warning_shown:
+                self._customer_missing_warning_shown = True
+                QtWidgets.QMessageBox.warning(
+                    self, tr("customer_filter", "Customer Filter"),
+                    f"{source_name}: Customer filter is active, but this CSV has no Customer column. Files like this will be skipped.")
+        return result
+
+    def _update_customer_filter_button(self):
+        if not self.selected_customers:
+            summary = tr("all_customers", "All Customers")
+        elif len(self.selected_customers) == 1:
+            summary = next(iter(self.selected_customers))
+        else:
+            summary = tr("customers_selected", "{count} selected").format(count=len(self.selected_customers))
+        self.customer_filter_button.setText(f"Customer\n{summary}")
+
+    def refresh_customer_filter(self, scan=True, show_messages=True):
+        previous = set(self.selected_customers)
+        errors = []
+        if scan:
+            self.available_customers, errors = discover_customers(self.raw_data_directory)
+        available = set(self.available_customers)
+        removed = previous - available
+        if previous:
+            self.selected_customers = previous & available
+        self._update_customer_filter_button()
+        if show_messages and removed:
+            QtWidgets.QMessageBox.warning(
+                self, tr("customer_filter", "Customer Filter"),
+                tr("customers_removed", "Customers no longer present were removed: {names}").format(
+                    names=", ".join(sorted(removed))))
+        if show_messages and errors:
+            QtWidgets.QMessageBox.warning(
+                self, tr("customer_filter", "Customer Filter"),
+                tr("customer_scan_errors", "Some CSV files could not be scanned ({count}).").format(count=len(errors)))
+
+    def open_customer_filter_dialog(self):
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle(tr("customer_filter", "Customer Filter"))
+        dialog.resize(430, 520)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        search = QtWidgets.QLineEdit()
+        search.setPlaceholderText(tr("search_customers", "Search customers..."))
+        layout.addWidget(search)
+        customer_list = QtWidgets.QListWidget()
+        for customer in self.available_customers:
+            item = QtWidgets.QListWidgetItem(customer)
+            item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(QtCore.Qt.CheckState.Checked if customer in self.selected_customers else QtCore.Qt.CheckState.Unchecked)
+            customer_list.addItem(item)
+        layout.addWidget(customer_list)
+
+        def filter_items(text):
+            query = text.casefold()
+            for index in range(customer_list.count()):
+                item = customer_list.item(index)
+                item.setHidden(query not in item.text().casefold())
+
+        search.textChanged.connect(filter_items)
+        actions = QtWidgets.QHBoxLayout()
+        all_button = QtWidgets.QPushButton(tr("select_all", "Select All"))
+        clear_button = QtWidgets.QPushButton(tr("clear", "Clear"))
+        refresh_button = QtWidgets.QPushButton(tr("refresh", "Refresh"))
+        actions.addWidget(all_button)
+        actions.addWidget(clear_button)
+        actions.addWidget(refresh_button)
+        layout.addLayout(actions)
+
+        def set_all(check_state):
+            for index in range(customer_list.count()):
+                customer_list.item(index).setCheckState(check_state)
+
+        all_button.clicked.connect(lambda: set_all(QtCore.Qt.CheckState.Checked))
+        clear_button.clicked.connect(lambda: set_all(QtCore.Qt.CheckState.Unchecked))
+        refresh_button.clicked.connect(dialog.reject)
+        refresh_button.clicked.connect(lambda: self.refresh_customer_filter(scan=True))
+        refresh_button.clicked.connect(self.open_customer_filter_dialog)
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            checked = {customer_list.item(i).text() for i in range(customer_list.count())
+                       if customer_list.item(i).checkState() == QtCore.Qt.CheckState.Checked}
+            self.selected_customers = set() if checked == set(self.available_customers) else checked
+            self._update_customer_filter_button()
+
     def _create_menu_button(self, text):
         button = QtWidgets.QPushButton(text)
         button.setCheckable(True) # Make button checkable for selection feedback
@@ -3427,6 +3568,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         self.cpk_calculation_button.setText(tr("cpk_calculator"))
         self.tool_matching_button.setText(tr("tool_matching"))
         self.cl_tighten_button.setText(tr("cl_tighten"))
+        self._update_customer_filter_button()
         
         # 更新按鈕文字
         if hasattr(self, 'settings_button'):
@@ -4032,12 +4174,15 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
 
     def process_charts(self):
         import time
+        self._customer_missing_warning_shown = False
         self.results = []
         total_charts_count = 0
         skipped_charts_count = 0
         processed_charts_count = 0
 
         try:
+            if not self.ensure_charts_selected():
+                return
             self.validate_files_and_directories()
             self.progress_bar.show()  # 顯示進度條
             self.progress_bar.setValue(0)
@@ -4045,6 +4190,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
             self.clear_image_grid()
 
             all_charts_info = load_chart_information(self.filepath)
+            all_charts_info = self.filter_chart_information(all_charts_info)
             total_charts_count = len(all_charts_info)
             self.progress_bar.setMaximum(100)
 
@@ -4096,6 +4242,12 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                         raw_df = self.get_cached_csv(filepath)
                         
                         if raw_df is not None:
+                            customer_result = self.filter_customer_data(raw_df, os.path.basename(filepath))
+                            if customer_result.missing_column or customer_result.data.empty:
+                                skipped_charts_count += 1
+                                print(f"[Customer Filter] No selected Customer data: {group_name}/{chart_name}")
+                                continue
+                            raw_df = customer_result.data
                             print(f" - 原始資料 shape: {raw_df.shape}")
 
                             # 性能優化：使用預處理的數據類型
@@ -4297,7 +4449,13 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
             if filepath and os.path.exists(filepath) and filepath not in processed_files:
                 try:
                     # 快速讀取部分數據來判斷類型（只需要 point_val 欄位）
-                    raw_df = pd.read_csv(filepath, usecols=['point_val'] if 'point_val' in pd.read_csv(filepath, nrows=1).columns else None, nrows=1000)
+                    raw_df = pd.read_csv(filepath, nrows=1000)
+                    customer_result = self.filter_customer_data(raw_df, os.path.basename(filepath))
+                    if customer_result.missing_column or customer_result.data.empty:
+                        chart_types[chart_key] = 'continuous'
+                        processed_files.add(filepath)
+                        continue
+                    raw_df = customer_result.data
                     
                     if 'point_val' in raw_df.columns:
                         data_type = determine_data_type(raw_df['point_val'].dropna())
@@ -6072,6 +6230,8 @@ class CLTightenWidget(QtWidgets.QWidget):
     def start_calculation(self):
         """開始CL計算"""
         try:
+            if hasattr(self.parent_app, 'ensure_charts_selected') and not self.parent_app.ensure_charts_selected():
+                return
             # 檢查必要檔案
             if not os.path.exists(self.filepath):
                 QtWidgets.QMessageBox.warning(self, "Warning", 
@@ -6098,7 +6258,9 @@ class CLTightenWidget(QtWidgets.QWidget):
                 chart_info_path=self.filepath,
                 raw_data_dir=self.raw_data_directory,
                 start_date=start_date,
-                end_date=end_date
+                end_date=end_date,
+                selected_customers=self.parent_app.get_selected_customers(),
+                selected_chart_keys=self.parent_app.get_selected_chart_keys()
             )
             
             # 顯示並重置進度條

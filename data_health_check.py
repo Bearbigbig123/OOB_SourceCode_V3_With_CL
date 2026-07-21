@@ -28,6 +28,8 @@ class DataValidatorWorker(QtCore.QThread):
         self.excel_path = excel_path
         self.raw_data_dir = raw_data_dir
         self._is_running = True
+        self._current_group = None
+        self._current_chart = None
 
     def stop(self):
         self._is_running = False
@@ -125,6 +127,8 @@ class DataValidatorWorker(QtCore.QThread):
                 # --- A. 讀取欄位資料 ---
                 group = str(row.get('GroupName', '')).strip()
                 chart = str(row.get('ChartName', '')).strip()
+                self._current_group = group if group and group.lower() != 'nan' else None
+                self._current_chart = chart if chart and chart.lower() != 'nan' else None
                 chart_id = f"{group}_{chart}" if group and chart else f"Row {row_num}"
 
                 target = row.get('Target')
@@ -481,7 +485,9 @@ class DataValidatorWorker(QtCore.QThread):
             "Action": action,
             "CSV_Path": csv_path or "",
             "Source": source,
-            "RowNum": row_num
+            "RowNum": row_num,
+            "GroupName": self._current_group,
+            "ChartName": self._current_chart
         }
         
         # 對於關鍵錯誤立即發送，對於一般狀態可以稍後批量發送
@@ -500,9 +506,12 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
     """
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.parent_app = parent
         self.excel_path = ""
         self.raw_data_dir = ""
         self.all_logs = []
+        self.chart_checkboxes = {}
+        self.chart_statuses = {}
         
         self.init_ui()
         self.apply_styles()
@@ -608,21 +617,73 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
         stats_layout.addWidget(self.card_unable)
         layout.addLayout(stats_layout)
 
+        # Analysis scope card (shown after the first completed health check).
+        self.scope_card = QtWidgets.QFrame()
+        self.scope_card.setObjectName("ScopeCard")
+        self.scope_card.setStyleSheet("""
+            QFrame#ScopeCard { background:white; border:1px solid #DCE4F2; border-radius:12px; }
+            QLineEdit { background:#F8FAFC; border:1px solid #CBD5E1; border-radius:8px; padding:7px 10px; }
+            QScrollArea { border:none; background:transparent; }
+        """)
+        self.scope_card.setVisible(False)
+        scope_layout = QtWidgets.QVBoxLayout(self.scope_card)
+        scope_layout.setContentsMargins(18, 14, 18, 14)
+        scope_layout.setSpacing(10)
+        scope_header = QtWidgets.QHBoxLayout()
+        self.scope_title = QtWidgets.QLabel()
+        self.scope_title.setStyleSheet("font-size:15px; font-weight:700; color:#1E293B;")
+        self.scope_count = QtWidgets.QLabel()
+        self.scope_count.setStyleSheet("color:#344CB7; background:#EEF2FF; padding:5px 10px; border-radius:10px; font-weight:700;")
+        self.scope_search = QtWidgets.QLineEdit()
+        self.scope_search.setClearButtonEnabled(True)
+        self.scope_search.setFixedWidth(260)
+        self.scope_search.textChanged.connect(self.filter_chart_scope)
+        self.scope_select_all = QtWidgets.QPushButton()
+        self.scope_clear = QtWidgets.QPushButton()
+        self.scope_toggle = QtWidgets.QPushButton()
+        self.scope_toggle.setCheckable(True)
+        self.scope_toggle.setChecked(False)
+        self.scope_toggle.clicked.connect(self.toggle_chart_scope)
+        self.scope_select_all.clicked.connect(self.select_all_charts)
+        self.scope_clear.clicked.connect(self.clear_all_charts)
+        scope_header.addWidget(self.scope_title)
+        scope_header.addWidget(self.scope_count)
+        scope_header.addStretch()
+        scope_header.addWidget(self.scope_search)
+        scope_header.addWidget(self.scope_select_all)
+        scope_header.addWidget(self.scope_clear)
+        self.scope_toggle.setVisible(False)
+        scope_layout.addLayout(scope_header)
+
+        self.scope_scroll = QtWidgets.QScrollArea()
+        self.scope_scroll.setWidgetResizable(True)
+        self.scope_scroll.setMaximumHeight(230)
+        self.scope_scroll.setVisible(False)
+        self.scope_content = QtWidgets.QWidget()
+        self.scope_grid = QtWidgets.QGridLayout(self.scope_content)
+        self.scope_grid.setContentsMargins(4, 4, 4, 4)
+        self.scope_grid.setSpacing(8)
+        self.scope_scroll.setWidget(self.scope_content)
+        scope_layout.addWidget(self.scope_scroll)
+        layout.addWidget(self.scope_card)
+
         # 5. 詳細表格
         self.table = QtWidgets.QTableWidget()
-        self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["", "", "", "", ""])
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels(["", "", "", "", "", ""])
         
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(4, QtWidgets.QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(4, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(5, QtWidgets.QHeaderView.ResizeMode.Interactive)
         
         # 設定固定寬度給特定欄位
-        self.table.setColumnWidth(0, 120)  # Severity
-        self.table.setColumnWidth(4, 100)  # Open CSV
+        self.table.setColumnWidth(0, 70)   # Include in analysis
+        self.table.setColumnWidth(1, 120)  # Severity
+        self.table.setColumnWidth(5, 100)  # Open CSV
         
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -685,6 +746,13 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
         """刷新 UI 中所有可翻譯的文字"""
         # 標題與路徑
         self.title_label.setText(tr("data_health_monitor", "Data Health Monitor"))
+        if hasattr(self, 'scope_title'):
+            self.scope_title.setText(tr("chart_scope", "SPC Chart Analysis Filter"))
+            self.scope_search.setPlaceholderText(tr("search_charts", "Search GroupName / ChartName..."))
+            self.scope_select_all.setText(tr("select_all", "Select All"))
+            self.scope_clear.setText(tr("clear", "Clear"))
+            self.scope_toggle.setText(tr("collapse", "Collapse") if self.scope_toggle.isChecked() else tr("expand", "Expand"))
+            self.update_scope_count()
         if self.excel_path:
             self.path_label.setText(os.path.basename(self.excel_path))
         else:
@@ -711,6 +779,7 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
         
         # 表格欄位標題
         self.table.setHorizontalHeaderLabels([
+            tr("include_chart", "Include"),
             tr("severity", "Severity"),
             tr("location", "Location"),
             tr("issue_description", "Issue Description"),
@@ -720,7 +789,10 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
         
         # 重新顯示日誌以更新內容
         if self.all_logs:
+            preserved_selection = (self.parent_app.get_selected_chart_keys()
+                                   if hasattr(self.parent_app, 'get_selected_chart_keys') else None)
             self.display_sorted_logs()
+            self.build_chart_scope(preserved_selection)
     
     def translate_log_message(self, text):
         """翻譯日誌訊息 - 嘗試匹配已知的錯誤訊息並翻譯"""
@@ -949,18 +1021,136 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
             }
         """)
 
+    def toggle_chart_scope(self, expanded):
+        self.scope_scroll.setVisible(expanded)
+        self.scope_toggle.setText(tr("collapse", "Collapse") if expanded else tr("expand", "Expand"))
+
+    def _clear_scope_grid(self):
+        while self.scope_grid.count():
+            item = self.scope_grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.chart_checkboxes.clear()
+
+    def build_chart_scope(self, initial_selection=None):
+        self._clear_scope_grid()
+        self.chart_statuses = {}
+        try:
+            chart_info = pd.read_excel(self.excel_path, sheet_name='Chart', engine='openpyxl')
+        except Exception as exc:
+            print(f"[Chart Scope] Unable to load chart information: {exc}")
+            self.scope_card.setVisible(False)
+            return
+
+        log_map = {}
+        for log in self.all_logs:
+            group = log.get('GroupName')
+            chart = log.get('ChartName')
+            if group and chart:
+                log_map.setdefault((str(group).strip(), str(chart).strip()), []).append(log)
+
+        ordered_keys = []
+        for _, row in chart_info.iterrows():
+            key = (str(row.get('GroupName', '')).strip(), str(row.get('ChartName', '')).strip())
+            if key[0] and key[1] and key not in ordered_keys:
+                ordered_keys.append(key)
+
+        pass_keys = set()
+        for key in ordered_keys:
+            logs = log_map.get(key, [])
+            passed = any(log.get('Severity') == 'Pass' for log in logs)
+            if passed:
+                pass_keys.add(key)
+                status_text = tr("passed", "Passed")
+            else:
+                problem = next((str(log.get('Issue')) for log in logs if log.get('Severity') != 'Pass'), None)
+                status_text = problem or tr("unable_to_execute", "Unable to Execute")
+            self.chart_statuses[key] = {'passed': passed, 'reason': status_text}
+
+        for row in range(self.table.rowCount()):
+            location_item = self.table.item(row, 2)
+            key = location_item.data(QtCore.Qt.ItemDataRole.UserRole) if location_item else None
+            if not key or key not in self.chart_statuses:
+                unavailable = QtWidgets.QTableWidgetItem("—")
+                unavailable.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+                self.table.setItem(row, 0, unavailable)
+                continue
+            status = self.chart_statuses[key]
+            checkbox = QtWidgets.QCheckBox()
+            should_check = status['passed'] and (initial_selection is None or key in initial_selection)
+            checkbox.setChecked(should_check)
+            checkbox.setEnabled(status['passed'])
+            checkbox.setToolTip(status['reason'])
+            checkbox.toggled.connect(lambda checked, chart_key=key: self.on_table_chart_toggled(chart_key, checked))
+            container = QtWidgets.QWidget()
+            checkbox_layout = QtWidgets.QHBoxLayout(container)
+            checkbox_layout.setContentsMargins(0, 0, 0, 0)
+            checkbox_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            checkbox_layout.addWidget(checkbox)
+            self.table.setCellWidget(row, 0, container)
+            self.chart_checkboxes.setdefault(key, []).append(checkbox)
+
+        selected_keys = pass_keys if initial_selection is None else pass_keys & set(initial_selection)
+        if hasattr(self.parent_app, 'set_selected_chart_keys'):
+            self.parent_app.set_selected_chart_keys(selected_keys)
+        self.scope_card.setVisible(True)
+        self.scope_scroll.setVisible(False)
+        self.filter_chart_scope(self.scope_search.text())
+        self.update_scope_count()
+
+    def filter_chart_scope(self, text):
+        self.apply_filter()
+
+    def select_all_charts(self):
+        for checkboxes in self.chart_checkboxes.values():
+            if checkboxes and checkboxes[0].isEnabled():
+                checkboxes[0].setChecked(True)
+        self.on_chart_selection_changed()
+
+    def clear_all_charts(self):
+        for checkboxes in self.chart_checkboxes.values():
+            if checkboxes and checkboxes[0].isEnabled():
+                checkboxes[0].setChecked(False)
+        self.on_chart_selection_changed()
+
+    def on_table_chart_toggled(self, key, checked):
+        for checkbox in self.chart_checkboxes.get(key, []):
+            if checkbox.isChecked() != checked:
+                checkbox.blockSignals(True)
+                checkbox.setChecked(checked)
+                checkbox.blockSignals(False)
+        self.on_chart_selection_changed()
+
+    def on_chart_selection_changed(self, *_):
+        selected = {key for key, checkboxes in self.chart_checkboxes.items()
+                    if checkboxes and checkboxes[0].isEnabled() and checkboxes[0].isChecked()}
+        if hasattr(self.parent_app, 'set_selected_chart_keys'):
+            self.parent_app.set_selected_chart_keys(selected)
+        self.update_scope_count()
+
+    def update_scope_count(self):
+        if not hasattr(self, 'scope_count'):
+            return
+        total = sum(1 for checkboxes in self.chart_checkboxes.values() if checkboxes and checkboxes[0].isEnabled())
+        selected = sum(1 for checkboxes in self.chart_checkboxes.values()
+                       if checkboxes and checkboxes[0].isEnabled() and checkboxes[0].isChecked())
+        self.scope_count.setText(tr("charts_selected_count", "Selected {selected} / {total}").format(selected=selected, total=total))
+
     def apply_filter(self):
         """根據 checkbox 狀態篩選表格顯示"""
         show_errors_only = self.chk_filter_errors.isChecked()
         
         for row in range(self.table.rowCount()):
-            severity_item = self.table.item(row, 0)
+            severity_item = self.table.item(row, 1)
+            location_item = self.table.item(row, 2)
             if severity_item:
                 severity_text = severity_item.text()
                 # 檢查是否包含 "Pass" 或 "✅"
                 is_pass = "Pass" in severity_text or "✅" in severity_text
                 # 如果勾選「只顯示錯誤」，就隱藏 Pass 行
-                self.table.setRowHidden(row, show_errors_only and is_pass)
+                query = self.scope_search.text().strip().casefold() if hasattr(self, 'scope_search') else ''
+                matches_search = not query or (location_item and query in location_item.text().casefold())
+                self.table.setRowHidden(row, (show_errors_only and is_pass) or not matches_search)
     
     def start_check(self):
         if not self.excel_path or not os.path.exists(self.excel_path):
@@ -972,6 +1162,10 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
         self.btn_open_source.setEnabled(False) # 開始時禁用
         self.table.setRowCount(0)
         self.all_logs = []
+        self.scope_card.setVisible(False)
+        self._clear_scope_grid()
+        if hasattr(self.parent_app, 'selected_chart_keys'):
+            self.parent_app.selected_chart_keys = None
         
         self.lbl_val_total.setText("0")
         self.lbl_val_unable.setText("0")
@@ -1090,6 +1284,9 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
         
         item_location = QtWidgets.QTableWidgetItem(str(log['Location']))
         item_location.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        group = log.get('GroupName')
+        chart = log.get('ChartName')
+        item_location.setData(QtCore.Qt.ItemDataRole.UserRole, (str(group).strip(), str(chart).strip()) if group and chart else None)
         
         # 翻譯 Issue 和 Action 訊息（只針對錯誤訊息翻譯）
         if sev_text in ["Unable to Execute", "Warning"]:
@@ -1107,10 +1304,10 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
         item_action.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter | QtCore.Qt.AlignmentFlag.AlignVCenter)
         
         # 直接設定到指定行，不插入
-        self.table.setItem(row_index, 0, item_sev)
-        self.table.setItem(row_index, 1, item_location)
-        self.table.setItem(row_index, 2, item_issue)
-        self.table.setItem(row_index, 3, item_action)
+        self.table.setItem(row_index, 1, item_sev)
+        self.table.setItem(row_index, 2, item_location)
+        self.table.setItem(row_index, 3, item_issue)
+        self.table.setItem(row_index, 4, item_action)
         
         # [優化] 簡化按鈕創建邏輯
         source = log.get('Source', 'Unknown')
@@ -1137,7 +1334,7 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
             """)
             btn_open.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
             btn_open.clicked.connect(lambda: self.open_source_file())
-            self.table.setCellWidget(row_index, 4, btn_open)
+            self.table.setCellWidget(row_index, 5, btn_open)
         elif source == "CSV" and csv_path:
             # CSV 錯誤：開啟對應 CSV 檔案 - 修復路徑問題
             if os.path.exists(csv_path):
@@ -1162,7 +1359,7 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
                 # 修復lambda閉包問題 - 創建本地變數
                 file_path = str(csv_path)  # 確保是字符串
                 btn_open.clicked.connect(lambda checked, path=file_path: self.open_csv_file(path))
-                self.table.setCellWidget(row_index, 4, btn_open)
+                self.table.setCellWidget(row_index, 5, btn_open)
             else:
                 # CSV路徑無效時顯示錯誤
                 btn_error = QtWidgets.QPushButton("❌ Missing")
@@ -1170,11 +1367,11 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
                 btn_error.setFixedSize(80, 32)  # 保持一致的高度
                 btn_error.setStyleSheet("QPushButton { background-color: #EF4444; color: white; border: none; border-radius: 6px; font-size: 11px; padding: 3px 6px; }")
                 btn_error.setEnabled(False)
-                self.table.setCellWidget(row_index, 4, btn_error)
+                self.table.setCellWidget(row_index, 5, btn_error)
         else:
             item_na = QtWidgets.QTableWidgetItem(tr("n_a", "N/A"))
             item_na.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-            self.table.setItem(row_index, 4, item_na)
+            self.table.setItem(row_index, 5, item_na)
         
         # 設定行高以容納按鈕
         self.table.setRowHeight(row_index, 36)  # 稍微比按鈕高一點
@@ -1184,6 +1381,7 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
         
         # [新增] 排序並顯示所有 logs
         self.display_sorted_logs()
+        self.build_chart_scope()
         
         # [修改] 不論 passed 為 True/False，都啟用這些按鈕
         self.btn_start.setEnabled(True)

@@ -9,11 +9,14 @@ logger = logging.getLogger(__name__)
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import oob_module_NGK_nostatic as oob_module
+from customer_filter import apply_customer_filter
+from translations import tr
 
 class SlidingToggleSwitch(QtWidgets.QAbstractButton):
     """iOS 風格滑動開關"""
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.parent_app = parent
         self.setCheckable(True)
         self.setMinimumWidth(66)
         self.setMinimumHeight(32)
@@ -858,6 +861,13 @@ class SPCCpkDashboard(QtWidgets.QWidget):
         try:
             # 這裡直接用 oob_module，不用再寫一堆 try...except import
             self.all_charts_info = oob_module.load_chart_information(chart_excel_path)
+            if hasattr(self.parent_app, 'filter_chart_information'):
+                self.all_charts_info = self.parent_app.filter_chart_information(self.all_charts_info)
+            if self.all_charts_info is not None and self.all_charts_info.empty:
+                QtWidgets.QMessageBox.warning(
+                    self, tr('chart_scope', 'Analysis Scope'),
+                    tr('no_charts_selected', 'No charts are selected. Select at least one chart in Data Health Monitor.'))
+                return
             if self.all_charts_info is None:
                 raise ValueError("Excel 返回內容為空")
         except Exception as e:
@@ -887,6 +897,17 @@ class SPCCpkDashboard(QtWidgets.QWidget):
             if raw_path and os.path.exists(raw_path):
                 try:
                     raw_df = pd.read_csv(raw_path)
+                    if hasattr(self.parent_app, 'filter_customer_data'):
+                        customer_result = self.parent_app.filter_customer_data(raw_df, os.path.basename(raw_path))
+                    else:
+                        customer_result = apply_customer_filter(raw_df, set())
+                    if customer_result.missing_column or customer_result.data.empty:
+                        reason = "missing Customer column" if customer_result.missing_column else "no selected Customer data"
+                        print(f"[Customer Filter] Skipped {group_name}/{chart_name}: {reason}")
+                        self.raw_charts_dict[(group_name, chart_name)] = None
+                        self.cpk_results[(group_name, chart_name)] = {'Cpk': None}
+                        continue
+                    raw_df = customer_result.data
                     usl = chart_info.get('USL', None)
                     lsl = chart_info.get('LSL', None)
                     # 過濾超規點

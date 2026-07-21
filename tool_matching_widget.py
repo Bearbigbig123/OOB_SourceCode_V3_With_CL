@@ -1,6 +1,7 @@
 ﻿import os
 import logging
 import pandas as pd
+from customer_filter import apply_customer_filter
 from PyQt6 import QtWidgets, QtCore, QtGui
 import pickle # Import pickle module for deep copying
 # Translation System
@@ -713,6 +714,17 @@ class ToolMatchingWidget(QtWidgets.QWidget):
 
         try:
             df = pd.read_csv(file_path)
+            if hasattr(self.parent_app, 'filter_customer_data'):
+                customer_result = self.parent_app.filter_customer_data(df, os.path.basename(file_path))
+            else:
+                customer_result = apply_customer_filter(df, set())
+            if customer_result.missing_column:
+                self.status_label.setText("Customer filter active, but the CSV has no Customer column.")
+                return
+            if customer_result.data.empty:
+                self.status_label.setText("No data for the selected Customer(s).")
+                return
+            df = customer_result.data
         except Exception as e:
             self.status_label.setText(f"Failed to read file: {e}")
             return

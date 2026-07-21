@@ -63,6 +63,22 @@ class Translations:
     """翻譯字典"""
     
     EN = {
+        "customer_filter": "Customer Filter",
+        "all_customers": "All Customers",
+        "customers_selected": "{count} selected",
+        "search_customers": "Search customers...",
+        "select_all": "Select All",
+        "clear": "Clear",
+        "refresh": "Refresh",
+        "customers_removed": "Customers no longer present were removed: {names}",
+        "customer_scan_errors": "Some CSV files could not be scanned ({count}).",
+        "chart_scope": "SPC Chart Analysis Filter",
+        "search_charts": "Search GroupName / ChartName...",
+        "charts_selected_count": "Selected {selected} / {total}",
+        "expand": "Expand",
+        "collapse": "Collapse",
+        "no_charts_selected": "No charts are selected. Select at least one chart in Data Health Monitor.",
+        "include_chart": "Include",
         # === Common ===
         "app_title": "SPC Chart Processor",
         "select": "Select",
@@ -457,6 +473,22 @@ class Translations:
     }
     
     ZH_TW = {
+        "chart_scope": "SPC Chart 分析篩選",
+        "search_charts": "搜尋 GroupName / ChartName...",
+        "charts_selected_count": "已選 {selected} / {total}",
+        "expand": "展開",
+        "collapse": "收合",
+        "no_charts_selected": "尚未選擇 Chart，請至資料健康檢查至少選擇一張。",
+        "include_chart": "選取",
+        "customer_filter": "Customer 篩選",
+        "all_customers": "全部客戶",
+        "customers_selected": "已選 {count} 間",
+        "search_customers": "搜尋客戶...",
+        "select_all": "全選",
+        "clear": "清除",
+        "refresh": "重新整理",
+        "customers_removed": "已移除 rawdata 中不存在的客戶：{names}",
+        "customer_scan_errors": "有 {count} 個 CSV 無法掃描。",
         # === 通用 ===
         "app_title": "SPC 圖表處理系統",
         "select": "選擇",

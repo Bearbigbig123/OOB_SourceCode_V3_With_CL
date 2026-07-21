@@ -1,4 +1,6 @@
 import pandas as pd
+from customer_filter import apply_customer_filter
+from chart_filter import filter_chart_information
 import numpy as np
 import os
 
@@ -139,7 +141,8 @@ def transform_johnson_slifker_shapiro_full(data):
 class CLTightenCalculator:
     """Control Limit Tighten Calculator - 管制線收緊計算器"""
     
-    def __init__(self, chart_info_path=None, raw_data_dir=None, start_date=None, end_date=None):
+    def __init__(self, chart_info_path=None, raw_data_dir=None, start_date=None, end_date=None,
+                 selected_customers=None, selected_chart_keys=None):
         """
         初始化 CL Tighten Calculator
         
@@ -153,6 +156,8 @@ class CLTightenCalculator:
         self.raw_data_dir = raw_data_dir
         self.start_date = start_date
         self.end_date = end_date
+        self.selected_customers = set(selected_customers or [])
+        self.selected_chart_keys = None if selected_chart_keys is None else set(selected_chart_keys)
         self.results = []
         
     # === Utility Functions ===
@@ -2584,6 +2589,7 @@ class CLTightenCalculator:
 
         print("--- 1. 載入圖表配置 ---")
         all_charts_info = self.load_chart_information(self.chart_info_path)
+        all_charts_info = filter_chart_information(all_charts_info, self.selected_chart_keys)
         if all_charts_info.empty:
             raise ValueError("無法載入有效的圖表配置")
 
@@ -2614,6 +2620,16 @@ class CLTightenCalculator:
 
             try:
                 raw_df = pd.read_csv(filepath, float_precision='round_trip')
+                customer_result = apply_customer_filter(raw_df, self.selected_customers)
+                if customer_result.missing_column or customer_result.data.empty:
+                    result = chart_info.to_dict()
+                    result['Status'] = 'No Raw Data'
+                    result['ErrorMessage'] = ('Missing Customer column' if customer_result.missing_column
+                                              else 'No data for selected Customer(s)')
+                    result['PlotFile'] = 'No Raw Data'
+                    self.results.append(result)
+                    continue
+                raw_df = customer_result.data
                 
                 # 強制轉換 point_val 為數字型別（容錯處理）
                 if 'point_val' in raw_df.columns:
