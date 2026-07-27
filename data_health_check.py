@@ -137,6 +137,8 @@ class DataValidatorWorker(QtCore.QThread):
                 usl = row.get('USL')
                 lsl = row.get('LSL')
                 char_type = str(row.get('Characteristics', '')).strip()
+                valid_types = ['Nominal', 'Smaller', 'Bigger']
+                match_type = next((t for t in valid_types if t.lower() == char_type.lower()), None)
 
                 # --- B. Excel 邏輯檢查 ---
 
@@ -147,18 +149,26 @@ class DataValidatorWorker(QtCore.QThread):
                     has_error_in_row = True
                     excel_logic_error_count += 1
 
-                # B2. 檢查管制界限 (Target, UCL, LCL 必填)
-                if pd.isna(target) or pd.isna(ucl) or pd.isna(lcl):
-                    self.emit_log("Unable to Execute", f"Row {row_num} ({chart_id})", "Missing Target/UCL/LCL", f"Check Excel row {row_num}: Target, UCL, LCL are mandatory.", source="Excel", row_num=row_num)
+                # B2. 單邊特性只要求對應方向的 Control Limit。
+                required_controls = {'Target': target}
+                if match_type == 'Smaller':
+                    required_controls['UCL'] = ucl
+                elif match_type == 'Bigger':
+                    required_controls['LCL'] = lcl
+                else:
+                    required_controls.update({'UCL': ucl, 'LCL': lcl})
+
+                missing_controls = [name for name, value in required_controls.items() if pd.isna(value)]
+                if missing_controls:
+                    missing_text = '/'.join(missing_controls)
+                    self.emit_log("Unable to Execute", f"Row {row_num} ({chart_id})", f"Missing {missing_text}", f"Check Excel row {row_num}: {missing_text} are mandatory for {match_type or 'this characteristic'}.", source="Excel", row_num=row_num)
                     unable_count += 1
                     excel_logic_error_count += 1
                     has_error_in_row = True
                 else:
                     try:
-                        # 檢查是否為數值（不檢查大小關係，留給 B4 統一檢查）
-                        float(target)
-                        float(ucl)
-                        float(lcl)
+                        for value in required_controls.values():
+                            float(value)
                     except Exception:
                         self.emit_log("Unable to Execute", f"Row {row_num} ({chart_id})", "Non-numeric Control Limits", f"Check Excel row {row_num}: Control limits must be numeric.", source="Excel", row_num=row_num)
                         unable_count += 1
@@ -166,9 +176,6 @@ class DataValidatorWorker(QtCore.QThread):
                         has_error_in_row = True
 
                 # B3. 檢查規格界限 (依據 Characteristics)
-                valid_types = ['Nominal', 'Smaller', 'Bigger']
-                match_type = next((t for t in valid_types if t.lower() == char_type.lower()), None)
-                
                 if not match_type:
                     excel_logic_error_count += 1
                     self.emit_log("Unable to Execute", f"Row {row_num} ({chart_id})", f"Invalid Characteristic: '{char_type}'", f"Check Excel row {row_num}: Characteristics must be Nominal, Smaller, or Bigger.", source="Excel", row_num=row_num)
@@ -232,11 +239,10 @@ class DataValidatorWorker(QtCore.QThread):
                         # 如果轉換失敗，前面的檢查已經捕捉到了，這裡不重複報錯
                         pass
                 elif match_type == 'Smaller' and not pd.isna(usl):
-                    # Smaller 只檢查 USL >= UCL >= Target >= LCL
+                    # Smaller 只檢查 USL >= UCL >= Target；LCL 可留空。
                     try:
                         target_val = float(target)
                         ucl_val = float(ucl)
-                        lcl_val = float(lcl)
                         usl_val = float(usl)
                         
                         violations = []
@@ -244,14 +250,12 @@ class DataValidatorWorker(QtCore.QThread):
                             violations.append(f"USL ({usl_val}) < UCL ({ucl_val})")
                         if ucl_val < target_val:
                             violations.append(f"UCL ({ucl_val}) < Target ({target_val})")
-                        if target_val < lcl_val:
-                            violations.append(f"Target ({target_val}) < LCL ({lcl_val})")
                         
                         if violations:
                             violation_text = "; ".join(violations)
                             self.emit_log("Unable to Execute", f"Row {row_num} ({chart_id})", 
                                         f"Logic violation: {violation_text}", 
-                                        f"Check Excel row {row_num}: Smaller type must satisfy USL >= UCL >= Target >= LCL.", 
+                                        f"Check Excel row {row_num}: Smaller type must satisfy USL >= UCL >= Target.",
                                         source="Excel", row_num=row_num)
                             unable_count += 1
                             has_error_in_row = True
@@ -259,16 +263,13 @@ class DataValidatorWorker(QtCore.QThread):
                     except (ValueError, TypeError):
                         pass
                 elif match_type == 'Bigger' and not pd.isna(lsl):
-                    # Bigger 只檢查 UCL >= Target >= LCL >= LSL
+                    # Bigger 只檢查 Target >= LCL >= LSL；UCL 可留空。
                     try:
                         target_val = float(target)
-                        ucl_val = float(ucl)
                         lcl_val = float(lcl)
                         lsl_val = float(lsl)
                         
                         violations = []
-                        if ucl_val < target_val:
-                            violations.append(f"UCL ({ucl_val}) < Target ({target_val})")
                         if target_val < lcl_val:
                             violations.append(f"Target ({target_val}) < LCL ({lcl_val})")
                         if lcl_val < lsl_val:
@@ -278,7 +279,7 @@ class DataValidatorWorker(QtCore.QThread):
                             violation_text = "; ".join(violations)
                             self.emit_log("Unable to Execute", f"Row {row_num} ({chart_id})", 
                                         f"Logic violation: {violation_text}", 
-                                        f"Check Excel row {row_num}: Bigger type must satisfy UCL >= Target >= LCL >= LSL.", 
+                                        f"Check Excel row {row_num}: Bigger type must satisfy Target >= LCL >= LSL.",
                                         source="Excel", row_num=row_num)
                             unable_count += 1
                             has_error_in_row = True

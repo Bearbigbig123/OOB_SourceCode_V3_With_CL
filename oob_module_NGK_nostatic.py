@@ -34,6 +34,42 @@ from PIL.ImageQt import ImageQt
 plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei', 'SimHei', 'Arial Unicode MS', 'Noto Sans CJK TC']
 plt.rcParams['axes.unicode_minus'] = False  # 正確顯示負號
 
+OOB_CALCULATED = 'CALCULATED'
+OOB_INSUFFICIENT_DATA = 'INSUFFICIENT_DATA'
+OOB_ERROR = 'ERROR'
+
+
+def is_valid_number(value):
+    """Return True only for a finite numeric value."""
+    try:
+        return value is not None and pd.notna(value) and np.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def unavailable_kshift_result(status):
+    """Build a K-shift result that cannot be mistaken for a normal result."""
+    return pd.Series({
+        'P95_k': np.nan,
+        'P50_k': np.nan,
+        'P05_k': np.nan,
+        'P95_k_ori': np.nan,
+        'P50_k_ori': np.nan,
+        'P05_k_ori': np.nan,
+        'P95_shift': status,
+        'P50_shift': status,
+        'P05_shift': status,
+    })
+
+
+def draw_horizontal_limit(plotter, value, label, x_min, x_max, fontsize=10):
+    """Draw an optional control line without sending NaN/None to Matplotlib."""
+    if not is_valid_number(value):
+        return
+    numeric_value = float(value)
+    plotter.hlines(numeric_value, x_min, x_max, colors='#E83F6F', linestyles='--', linewidth=1)
+    plotter.text(x=x_max, y=numeric_value, s=label, va='center', ha='left', fontsize=fontsize, color='#E83F6F')
+
 # Toggle Switch 自定義類
 class ToggleSwitch(QtWidgets.QWidget):
     """滑動開關 Widget"""
@@ -520,19 +556,17 @@ def normalize_characteristic(value):
 def preprocess_raw_df(raw_df):
     import numpy as np
     import pandas as pd
+    raw_df = raw_df.copy()
     raw_df.replace([np.inf, -np.inf, 'na', 'NA', 'NaN', 'nan'], np.nan, inplace=True)
     required_columns = ['GroupName', 'ChartName', 'point_val', 'Batch_ID', 'point_time']
     missing_columns = [col for col in required_columns if col not in raw_df.columns]
     if missing_columns:
         raise ValueError(f"原始數據缺少的欄位: {missing_columns}")
-    column_types = {
-        'GroupName': 'str',
-        'ChartName': 'str',
-        'point_val': 'float',
-        'Batch_ID': 'str',
-        'point_time': 'str'
-    }
-    return raw_df.astype(column_types)
+    raw_df['point_val'] = pd.to_numeric(raw_df['point_val'], errors='coerce')
+    raw_df.loc[~np.isfinite(raw_df['point_val']), 'point_val'] = np.nan
+    for column in ('GroupName', 'ChartName', 'Batch_ID', 'point_time'):
+        raw_df[column] = raw_df[column].astype('str')
+    return raw_df
 
 def format_datetime(dt):
     import pandas as pd
@@ -544,6 +578,13 @@ def format_datetime(dt):
 
 def format_and_clean_data(raw_df, chart_info):
     import pandas as pd
+    raw_df = raw_df.copy()
+    original_count = len(raw_df)
+
+    # 計算、繪圖共用同一套有效值。空白、NaN、Inf、文字都排除。
+    raw_df['point_val'] = pd.to_numeric(raw_df['point_val'], errors='coerce')
+    raw_df.loc[~np.isfinite(raw_df['point_val']), 'point_val'] = np.nan
+
     # 性能優化：使用向量化操作代替 apply
     raw_df['point_time'] = pd.to_datetime(
         raw_df['point_time'], 
@@ -558,6 +599,13 @@ def format_and_clean_data(raw_df, chart_info):
             raw_df = raw_df[raw_df['point_time'] >= create_time]
     
     raw_df.dropna(subset=['point_val', 'point_time'], inplace=True)
+    removed_count = original_count - len(raw_df)
+    if removed_count:
+        logger.warning(
+            "OOB preprocessing removed %d invalid point_val/point_time rows; %d rows remain",
+            removed_count,
+            len(raw_df),
+        )
     return raw_df
 def update_chart_limits(raw_df, chart_info):
     import numpy as np
@@ -585,29 +633,42 @@ def update_chart_limits(raw_df, chart_info):
     
     return raw_df, chart_info
 
-def exclude_oos_data(raw_df):
+def exclude_oos_data(raw_df, chart_info):
     import pandas as pd
     usl = raw_df['usl_val'].iat[0]
     lsl = raw_df['lsl_val'].iat[0]
-    
-    if pd.notna(usl) and pd.notna(lsl):
+    characteristic = normalize_characteristic(chart_info.get('Characteristics'))
+
+    # 單邊特性只使用有意義的規格側；另一側允許留空。
+    if characteristic in ('Smaller', 'Sigma'):
+        return raw_df[raw_df['point_val'] <= usl] if is_valid_number(usl) else raw_df
+    if characteristic == 'Bigger':
+        return raw_df[raw_df['point_val'] >= lsl] if is_valid_number(lsl) else raw_df
+
+    if is_valid_number(usl) and is_valid_number(lsl):
         return raw_df[(raw_df['point_val'] <= usl) & (raw_df['point_val'] >= lsl)]
-    elif pd.isna(usl):
+    elif not is_valid_number(usl) and is_valid_number(lsl):
         return raw_df[raw_df['point_val'] >= lsl]
-    elif pd.isna(lsl):
+    elif not is_valid_number(lsl) and is_valid_number(usl):
         return raw_df[raw_df['point_val'] <= usl]
     return raw_df  # 如果都沒有符合條件，則直接回傳原始資料
 
 # 優化後的 preprocess_data 函數
 def preprocess_data(chart_info, raw_df):
     try:
+        chart_info = chart_info.copy()
+        for column in ('USL', 'LSL', 'UCL', 'LCL', 'Target', 'Resolution'):
+            if column in chart_info:
+                chart_info[column] = pd.to_numeric(chart_info[column], errors='coerce')
+        chart_info['Characteristics'] = normalize_characteristic(chart_info.get('Characteristics'))
+
         raw_df = format_and_clean_data(raw_df, chart_info)  # 確保這個函數已經是最佳化的
         
         if raw_df.empty:
             return False, None, None
         
         raw_df, chart_info = update_chart_limits(raw_df, chart_info)  # 確保這個函數已經是最佳化的
-        raw_df = exclude_oos_data(raw_df)
+        raw_df = exclude_oos_data(raw_df, chart_info)
         
         # 保留必要欄位，如果有 Batch_ID 則保留
         columns_to_keep = ['point_val', 'point_time']
@@ -743,7 +804,7 @@ def record_high_low_calculator(current_week_data, historical_data):
         return {
             'record_high': False,
             'record_low': False,
-            'highlight_status': 'NO_HIGHLIGHT'
+            'highlight_status': OOB_ERROR
         }
 def review_kshift_results(results, resolution, characteristic, data_percentiles, base_percentiles):
     # 設定 highlight 的初始值
@@ -872,7 +933,7 @@ def kshift_sigma_ratio_calculator(base, data, characteristic, resolution, ucl, l
     # 這裡假設 base 和 data 是包含 'values' 鍵的字典
     if 'values' not in base or 'values' not in data:
          print("  kshift: 錯誤：輸入數據字典缺少 'values' 鍵。")
-         return pd.Series(results)
+         return unavailable_kshift_result(OOB_ERROR)
 
     data_values = data['values']
     base_values = base['values']
@@ -886,7 +947,7 @@ def kshift_sigma_ratio_calculator(base, data, characteristic, resolution, ucl, l
     # 如果週數據少於 1 個點，直接返回預設結果
     if data_cnt < 1:
         print("  kshift: data_cnt < 1, 返回預設結果。")
-        return pd.Series(results)
+        return unavailable_kshift_result(OOB_INSUFFICIENT_DATA)
 
     # 計算基線百分位數。請確保 get_percentiles 能處理 base_cnt = 3 的情況
     try:
@@ -895,12 +956,12 @@ def kshift_sigma_ratio_calculator(base, data, characteristic, resolution, ucl, l
         # 檢查計算分母所需的關鍵百分位數是否存在且不是 NaN
         if np.isnan(base_percentiles.get('P99.865', np.nan)) or np.isnan(base_percentiles.get('P0.135', np.nan)) or np.isnan(base_percentiles.get('P50', np.nan)):
              print("  kshift: 警告：基線百分位數計算結果無效 (包含 NaN)，可能基線數據不足。無法計算 K 值。")
-             return pd.Series(results) # 無法計算分母，返回預設結果
+             return unavailable_kshift_result(OOB_ERROR)
 
     except Exception as e:
          print(f"  kshift: 計算基線百分位數時發生錯誤: {e}")
          traceback.print_exc()
-         return pd.Series(results)
+         return unavailable_kshift_result(OOB_ERROR)
 
 
     rolled_data = None # 預設沒有滾動數據
@@ -940,7 +1001,7 @@ def kshift_sigma_ratio_calculator(base, data, characteristic, resolution, ucl, l
                  print(f"  kshift: rolling_calculation 或合併數據時發生錯誤: {e}")
                  traceback.print_exc()
                  # 如果發生錯誤，可能無法繼續，返回預設結果
-                 return pd.Series(results)
+                 return unavailable_kshift_result(OOB_ERROR)
 
 
             days_to_roll += 1
@@ -956,7 +1017,7 @@ def kshift_sigma_ratio_calculator(base, data, characteristic, resolution, ucl, l
         if len(rolled_data_values) < 5:
              print(f"  kshift: 警告：無法湊滿至少 5 個點用於滾動計算 (實際湊到 {len(rolled_data_values)} 點)。滾動結果將使用現有數據，計算可能不穩定。")
              # 您可以根據需求決定如果點數不足 5 時是否返回預設結果
-             return pd.Series(results) # 如果少於 5 點則視為無法計算並返回預設值
+             return unavailable_kshift_result(OOB_INSUFFICIENT_DATA)
 
 
         # 計算百分位數 (使用原始單點數據和滾動/填充後的數據)
@@ -973,14 +1034,14 @@ def kshift_sigma_ratio_calculator(base, data, characteristic, resolution, ucl, l
             for p in ['P95', 'P50', 'P05']:
                 if np.isnan(data_percentiles.get(p, np.nan)):
                      print(f"  kshift: 警告：原始週數據 {p} 百分位數為 NaN。無法計算 K 值。")
-                     return pd.Series(results)
+                     return unavailable_kshift_result(OOB_ERROR)
                 if np.isnan(rolled_data_percentiles.get(p, np.nan)):
                      print(f"  kshift: 警告：滾動數據 {p} 百分位數為 NaN。影響滾動 K 值計算。") # 這裡只是警告，可能可以繼續
 
         except Exception as e:
             print(f"  kshift: 計算百分位數時發生錯誤 (data_cnt=1 分支): {e}")
             traceback.print_exc()
-            return pd.Series(results)
+            return unavailable_kshift_result(OOB_ERROR)
 
 
     elif data_cnt >= 2:
@@ -992,12 +1053,12 @@ def kshift_sigma_ratio_calculator(base, data, characteristic, resolution, ucl, l
              for p in ['P95', 'P50', 'P05']:
                  if np.isnan(data_percentiles.get(p, np.nan)):
                       print(f"  kshift: 警告：當前週數據 {p} 百分位數為 NaN。無法計算 K 值。")
-                      return pd.Series(results)
+                      return unavailable_kshift_result(OOB_ERROR)
 
         except Exception as e:
             print(f"  kshift: 計算百分位數時發生錯誤 (data_cnt>=2 分支): {e}")
             traceback.print_exc()
-            return pd.Series(results)
+            return unavailable_kshift_result(OOB_ERROR)
 
 
         rolled_data = None # data_cnt >= 2 時，沒有滾動數據的概念用於 highlight 判斷
@@ -1005,7 +1066,7 @@ def kshift_sigma_ratio_calculator(base, data, characteristic, resolution, ucl, l
 
     else: # 這個分支理論上不會走到，因為開頭已經處理 data_cnt < 1
         print(f"  kshift: Warning: 未預期的 data_cnt 情況: {data_cnt}")
-        return pd.Series(results)
+        return unavailable_kshift_result(OOB_ERROR)
 
     # --- 計算分母 ---
     try:
@@ -1078,12 +1139,12 @@ def kshift_sigma_ratio_calculator(base, data, characteristic, resolution, ucl, l
         # 檢查分母是否有效 (非 NaN, 非 Inf)
         if np.isnan(p95k_deno) or np.isnan(p50k_deno) or np.isnan(p05k_deno) or np.isinf(p95k_deno) or np.isinf(p50k_deno) or np.isinf(p05k_deno):
             print("  kshift: 警告：計算出的分母無效 (包含 NaN 或 Inf)。無法計算 K 值。")
-            return pd.Series(results)
+            return unavailable_kshift_result(OOB_ERROR)
 
     except Exception as e:
         print(f"  kshift: 計算分母時發生錯誤: {e}")
         traceback.print_exc()
-        return pd.Series(results)
+        return unavailable_kshift_result(OOB_ERROR)
 
 
     # --- 計算 K 值 ---
@@ -1098,12 +1159,16 @@ def kshift_sigma_ratio_calculator(base, data, characteristic, resolution, ucl, l
         results['P50_k'] = safe_division(np.round(abs(data_percentiles.get('P50', np.nan) - base_percentiles.get('P50', np.nan)), 8), p50k_deno)
         results['P05_k'] = safe_division(np.round(abs(data_percentiles.get('P05', np.nan) - base_percentiles.get('P05', np.nan)), 8), p05k_deno)
 
+        if not all(is_valid_number(results[key]) for key in ('P95_k', 'P50_k', 'P05_k')):
+            print("  kshift: K 值包含無效數值，標記為 ERROR。")
+            return unavailable_kshift_result(OOB_ERROR)
+
         print(f"  kshift: 計算出的 K 值結果: {results}")
 
     except Exception as e:
         print(f"  kshift: 計算 K 值時發生錯誤: {e}")
         traceback.print_exc()
-        return pd.Series(results)
+        return unavailable_kshift_result(OOB_ERROR)
 
 
     # --- 判斷當前高亮條件 ---
@@ -1114,8 +1179,7 @@ def kshift_sigma_ratio_calculator(base, data, characteristic, resolution, ucl, l
     except Exception as e:
         print(f"  kshift: 判斷當前高亮條件時發生錯誤: {e}")
         traceback.print_exc()
-        # 如果判斷高亮失敗，相關結果可能不準確，但可以返回計算出的 K 值
-        current_highlight_conditions = {key: 'ERROR' for key in ['P95_shift', 'P50_shift', 'P05_shift']} # 用 ERROR 標記
+        return unavailable_kshift_result(OOB_ERROR)
 
 
     # --- 計算滾動結果高亮條件 (如果存在滾動數據) ---
@@ -1144,8 +1208,7 @@ def kshift_sigma_ratio_calculator(base, data, characteristic, resolution, ucl, l
         except Exception as e:
             print(f"  kshift: 判斷滾動高亮條件時發生錯誤: {e}")
             traceback.print_exc()
-            # 如果判斷滾動高亮失敗，用 ERROR 標記
-            rolling_highlight_conditions = {key: 'ERROR' for key in ['P95_shift', 'P50_shift', 'P05_shift']}
+            return unavailable_kshift_result(OOB_ERROR)
 
 
     # --- 最終的高亮條件 ---
@@ -1206,9 +1269,25 @@ def determine_data_type(data_values):
         return 'continuous'
 
 # OOC計算
-def ooc_calculator(data, ucl, lcl):
-    data_cnt = len(data)
-    ooc_cnt = ((data['point_val'] > ucl) | (data['point_val'] < lcl)).sum()
+def ooc_calculator(data, ucl, lcl, characteristic='Nominal'):
+    values = pd.to_numeric(data['point_val'], errors='coerce').dropna()
+    data_cnt = len(values)
+    characteristic = normalize_characteristic(characteristic)
+
+    if characteristic in ('Smaller', 'Sigma'):
+        if not is_valid_number(ucl):
+            raise ValueError('Smaller/Sigma OOC requires a numeric UCL')
+        ooc_mask = values > float(ucl)
+    elif characteristic == 'Bigger':
+        if not is_valid_number(lcl):
+            raise ValueError('Bigger OOC requires a numeric LCL')
+        ooc_mask = values < float(lcl)
+    else:
+        if not is_valid_number(ucl) or not is_valid_number(lcl):
+            raise ValueError('Nominal OOC requires numeric UCL and LCL')
+        ooc_mask = (values > float(ucl)) | (values < float(lcl))
+
+    ooc_cnt = int(ooc_mask.sum())
     ooc_ratio = ooc_cnt / data_cnt if data_cnt != 0 else 0
     return data_cnt, ooc_cnt, ooc_ratio
 
@@ -1398,12 +1477,17 @@ def discrete_oob_calculator(base_data, weekly_data, chart_info, raw_df=None,
             )
             results['HL_trending'] = trending_result
         else:
-            results['HL_trending'] = 'NO_HIGHLIGHT'  # 缺少必要參數時不高亮
+            results['HL_trending'] = OOB_INSUFFICIENT_DATA
         
         # 3. 使用與連續型相同的 high_OOC 檢查
         print("  離散型 OOB: 計算 OOC...")
         weekly_df = pd.DataFrame({'point_val': weekly_data['values']})
-        ooc_results = ooc_calculator(weekly_df, chart_info.get('UCL'), chart_info.get('LCL'))
+        ooc_results = ooc_calculator(
+            weekly_df,
+            chart_info.get('UCL'),
+            chart_info.get('LCL'),
+            chart_info.get('Characteristics'),
+        )
         ooc_highlight = review_ooc_results(ooc_results[1], ooc_results[2])
         results['HL_high_OOC'] = ooc_highlight
         
@@ -1431,6 +1515,15 @@ def discrete_oob_calculator(base_data, weekly_data, chart_info, raw_df=None,
         print(f"  離散型 OOB 計算錯誤: {e}")
         import traceback
         traceback.print_exc()
+        for key in (
+            'HL_P95_shift',
+            'HL_P50_shift',
+            'HL_P05_shift',
+            'HL_sticking_shift',
+            'HL_trending',
+            'HL_category_LT_shift',
+        ):
+            results[key] = OOB_ERROR
     
     return results
 
@@ -1682,7 +1775,7 @@ def category_lt_shift_calculator(base_data, weekly_data, threshold=0.7):
         print(f"  category_LT_shift: 計算時發生錯誤: {e}")
         import traceback
         traceback.print_exc()
-        result['highlight_status'] = 'NO_HIGHLIGHT'
+        result['highlight_status'] = OOB_ERROR
     
     return result
 
@@ -1797,28 +1890,38 @@ def process_single_chart(chart_info, raw_df, initial_baseline_start_date, baseli
         if not baseline_insufficient and not baseline_empty:
             kshift_results = kshift_sigma_ratio_calculator(baseline_data_dict, weekly_data_dict, chart_info.get('Characteristics'), chart_info.get('Resolution'), chart_info.get('UCL'), chart_info.get('LCL')) # 使用 .get 防止 key 錯誤
         else:
-            kshift_results = {'P95_shift': 'NO_HIGHLIGHT', 'P50_shift': 'NO_HIGHLIGHT', 'P05_shift': 'NO_HIGHLIGHT'}
+            kshift_results = unavailable_kshift_result(OOB_INSUFFICIENT_DATA)
 
         print(f"  kshift_sigma_ratio_calculator 返回: {kshift_results}")
 
         print("  正在呼叫 ooc_calculator...")
         # ooc_calculator 使用週數據計算 OOC 點數
-        ooc_results = ooc_calculator(weekly_data, chart_info.get('UCL'), chart_info.get('LCL')) # 使用 .get 防止 key 錯誤
+        try:
+            ooc_results = ooc_calculator(
+                weekly_data,
+                chart_info.get('UCL'),
+                chart_info.get('LCL'),
+                chart_info.get('Characteristics'),
+            )
+            ooc_highlight = review_ooc_results(ooc_results[1], ooc_results[2])
+        except Exception as e:
+            logger.exception("OOC calculation failed: %s", e)
+            ooc_results = (len(weekly_data), 0, 0)
+            ooc_highlight = OOB_ERROR
         print(f"  ooc_calculator 返回: {ooc_results}")
 
         print("  正在呼叫 review_ooc_results...")
-        ooc_highlight = review_ooc_results(ooc_results[1], ooc_results[2]) # 注意 ooc_results[1] 是 ooc_cnt, ooc_results[2] 是 ooc_points
         print(f"  review_ooc_results 返回: {ooc_highlight}")
 
         print("  正在呼叫 sticking_rate_calculator...")
         # sticking_rate_calculator 需要週數據和基線數據的 Series
         # IMPORTANT: 這裡傳入的 baseline_data['point_val'] 是使用 *實際確定* 的基線範圍數據
-        sticking_rate_results = sticking_rate_calculator(baseline_data['point_val'], weekly_data['point_val']) if not baseline_insufficient and not baseline_empty else {'highlight_status': 'NO_HIGHLIGHT'}
+        sticking_rate_results = sticking_rate_calculator(baseline_data['point_val'], weekly_data['point_val']) if not baseline_insufficient and not baseline_empty else {'highlight_status': OOB_INSUFFICIENT_DATA}
         print(f"  sticking_rate_calculator 返回: {sticking_rate_results}")
 
         print("  正在呼叫 trending...")
         # trending 也需要使用實際確定後的基線範圍
-        trending_results = trending(raw_df, weekly_start_date, weekly_end_date, actual_baseline_start_date, baseline_end_date) if not baseline_insufficient and not baseline_empty else 'NO_HIGHLIGHT'
+        trending_results = trending(raw_df, weekly_start_date, weekly_end_date, actual_baseline_start_date, baseline_end_date) if not baseline_insufficient and not baseline_empty else OOB_INSUFFICIENT_DATA
         print(f"  trending 返回: {trending_results}")
 
         print("  正在呼叫 record_high_low_calculator...")
@@ -1826,7 +1929,7 @@ def process_single_chart(chart_info, raw_df, initial_baseline_start_date, baseli
         logger.debug("當週時間範圍 - 從 %s 到 %s", weekly_start_date, weekly_end_date)
         logger.debug("基線結束與當週開始間隔 = %s", weekly_start_date - baseline_end_date)
         # 計算當週數據是否創下歷史新高或新低
-        record_results = record_high_low_calculator(weekly_data['point_val'].values, baseline_data['point_val'].values) if not baseline_insufficient and not baseline_empty else {'highlight_status': 'NO_HIGHLIGHT', 'record_high': False, 'record_low': False}
+        record_results = record_high_low_calculator(weekly_data['point_val'].values, baseline_data['point_val'].values) if not baseline_insufficient and not baseline_empty else {'highlight_status': OOB_INSUFFICIENT_DATA, 'record_high': False, 'record_low': False}
         print(f"  record_high_low_calculator 返回: {record_results}")
 
         # 判斷是否需要 highlight (任何一個子指標需要高亮，則總體高亮)
@@ -1841,6 +1944,22 @@ def process_single_chart(chart_info, raw_df, initial_baseline_start_date, baseli
         ) else 'NO_HIGHLIGHT'
         print(f"  計算出的 highlight_status: {highlight_status}")
 
+
+        oob_values = [
+            kshift_results.get('P95_shift'),
+            kshift_results.get('P50_shift'),
+            kshift_results.get('P05_shift'),
+            sticking_rate_results.get('highlight_status'),
+            trending_results,
+            ooc_highlight,
+            record_results.get('highlight_status'),
+        ]
+        if OOB_ERROR in oob_values:
+            oob_status = OOB_ERROR
+        elif OOB_INSUFFICIENT_DATA in oob_values:
+            oob_status = OOB_INSUFFICIENT_DATA
+        else:
+            oob_status = OOB_CALCULATED
 
         # 組織結果
         # 注意使用 .get(key, default_value) 來安全存取字典鍵，防止 KeyError
@@ -1869,6 +1988,7 @@ def process_single_chart(chart_info, raw_df, initial_baseline_start_date, baseli
             'LCL': chart_info.get('LCL', 'N/A'),
             'Target': chart_info.get('Target', 'N/A'),
             'Resolution': chart_info.get('Resolution', 'N/A'),
+            'OOB_Status': oob_status,
             'baseline_insufficient': baseline_insufficient,  # 新增標記，供後續使用
             'baseline_empty': baseline_empty  # 新增標記，記錄基線是否為空
             # 可以考慮添加 actual_baseline_start_date 到結果中，用於記錄實際使用的基線範圍
@@ -2045,13 +2165,11 @@ def plot_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date, debug
     x_values = np.arange(points_num)
 
     # === 控制線 ===
-    plt.hlines(chart_info['UCL'], -0.8, points_num + 2, colors='#E83F6F', linestyles='--', linewidth=1)
+    draw_horizontal_limit(plt, chart_info.get('UCL'), 'UCL', -0.8, points_num + 2)
     plt.hlines(chart_info['Target'], -0.8, points_num + 2, colors='#087E8B', linestyles='--', linewidth=1)
-    plt.hlines(chart_info['LCL'], -0.8, points_num + 2, colors='#E83F6F', linestyles='--', linewidth=1)
+    draw_horizontal_limit(plt, chart_info.get('LCL'), 'LCL', -0.8, points_num + 2)
 
-    plt.text(x=points_num + 2, y=chart_info['UCL'], s='UCL', va='center', ha='left', fontsize=10, color='#E83F6F')
     plt.text(x=points_num + 2, y=chart_info['Target'], s='Target', va='center', ha='left', fontsize=10, color='#087E8B')
-    plt.text(x=points_num + 2, y=chart_info['LCL'], s='LCL', va='center', ha='left', fontsize=10, color='#E83F6F')
 
     # === 畫數據線 ===
     plt.plot(x_values, raw_df['point_val'], color='#5863F8', marker='o', linestyle='-')
@@ -2143,14 +2261,12 @@ def plot_spc_chart_interactive(raw_df, chart_info, weekly_start_date, weekly_end
     x_values = np.arange(points_num)
 
     # === 控制線 ===
-    ax.hlines(chart_info['UCL'], -0.8, points_num + 2, colors='#E83F6F', linestyles='--', linewidth=1)
+    draw_horizontal_limit(ax, chart_info.get('UCL'), 'UCL', -0.8, points_num + 2, fontsize=7)
     ax.hlines(chart_info['Target'], -0.8, points_num + 2, colors='#087E8B', linestyles='--', linewidth=1)
-    ax.hlines(chart_info['LCL'], -0.8, points_num + 2, colors='#E83F6F', linestyles='--', linewidth=1)
+    draw_horizontal_limit(ax, chart_info.get('LCL'), 'LCL', -0.8, points_num + 2, fontsize=7)
 
     # 標籤字體縮小
-    ax.text(x=points_num + 2, y=chart_info['UCL'], s='UCL', va='center', ha='left', fontsize=7, color='#E83F6F')
     ax.text(x=points_num + 2, y=chart_info['Target'], s='Target', va='center', ha='left', fontsize=7, color='#087E8B')
-    ax.text(x=points_num + 2, y=chart_info['LCL'], s='LCL', va='center', ha='left', fontsize=7, color='#E83F6F')
 
     # === 畫數據線 ===
     line = ax.plot(x_values, raw_df['point_val'], color='#5863F8', marker='o', linestyle='-',markersize=4)[0]
@@ -2440,12 +2556,10 @@ def plot_weekly_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date
     plt.title(title, loc='left', fontsize=12)
 
     # 繪製控制線（使用 weekly 範圍作為長度參考）
-    plt.hlines(chart_info['UCL'], -0.8, points_num + 2, colors='#E83F6F', linestyles='--', linewidth=1)
+    draw_horizontal_limit(plt, chart_info.get('UCL'), 'UCL', -0.8, points_num + 2)
     plt.hlines(chart_info['Target'], -0.8, points_num + 2, colors='#087E8B', linestyles='--', linewidth=1)
-    plt.hlines(chart_info['LCL'], -0.8, points_num + 2, colors='#E83F6F', linestyles='--', linewidth=1)
-    plt.text(x=points_num + 2, y=chart_info['UCL'], s='UCL', va='center', ha='left', fontsize=10, color='#E83F6F')
+    draw_horizontal_limit(plt, chart_info.get('LCL'), 'LCL', -0.8, points_num + 2)
     plt.text(x=points_num + 2, y=chart_info['Target'], s='Target', va='center', ha='left', fontsize=10, color='#087E8B')
-    plt.text(x=points_num + 2, y=chart_info['LCL'], s='LCL', va='center', ha='left', fontsize=10, color='#E83F6F')
 
     # 畫 weekly 的折線（x 軸使用 0..N-1）
     plt.plot(x_values, df_weekly['point_val'].values, color='#5863F8', marker='o', linestyle='-')
@@ -2537,12 +2651,10 @@ def plot_weekly_spc_chart_interactive(raw_df, chart_info, weekly_start_date, wee
     ax.set_title(title, loc='left', fontsize=9)
 
     # 繪製控制線（使用 weekly 範圍作為長度參考）
-    ax.hlines(chart_info['UCL'], -0.8, points_num + 2, colors='#E83F6F', linestyles='--', linewidth=1,)
+    draw_horizontal_limit(ax, chart_info.get('UCL'), 'UCL', -0.8, points_num + 2, fontsize=7)
     ax.hlines(chart_info['Target'], -0.8, points_num + 2, colors='#087E8B', linestyles='--', linewidth=1)
-    ax.hlines(chart_info['LCL'], -0.8, points_num + 2, colors='#E83F6F', linestyles='--', linewidth=1)
-    ax.text(x=points_num + 2, y=chart_info['UCL'], s='UCL', va='center', ha='left', fontsize=7, color='#E83F6F')
+    draw_horizontal_limit(ax, chart_info.get('LCL'), 'LCL', -0.8, points_num + 2, fontsize=7)
     ax.text(x=points_num + 2, y=chart_info['Target'], s='Target', va='center', ha='left', fontsize=7, color='#087E8B')
-    ax.text(x=points_num + 2, y=chart_info['LCL'], s='LCL', va='center', ha='left', fontsize=7, color='#E83F6F')
 
     # 畫 weekly 的折線（x 軸使用 0..N-1）
     line = ax.plot(x_values, df_weekly['point_val'].values, color='#5863F8', marker='o', linestyle='-',markersize=4)[0]
@@ -3205,10 +3317,16 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         self.customer_filter_button = QtWidgets.QPushButton()
         self.customer_filter_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.customer_filter_button.setToolTip("Select one or more Customers for all analyses")
+        self.customer_filter_button.setMinimumHeight(58)
         self.customer_filter_button.setStyleSheet("""
-            QPushButton { background-color: white; color: #000957; border-radius: 7px;
-                          padding: 7px 8px; text-align: left; font-size: 12px; }
-            QPushButton:hover { background-color: #eef2ff; }
+            QPushButton {
+                background-color: white; color: #172554;
+                border: 1px solid rgba(255, 255, 255, 0.65);
+                border-radius: 10px; padding: 8px 11px;
+                text-align: left; font-size: 12px; font-weight: 600;
+            }
+            QPushButton:hover { background-color: #eef2ff; border-color: #c7d2fe; }
+            QPushButton:pressed { background-color: #e0e7ff; }
         """)
         self.customer_filter_button.clicked.connect(self.open_customer_filter_dialog)
         self.left_menu_layout.addWidget(self.customer_filter_button)
@@ -3476,32 +3594,136 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
     def open_customer_filter_dialog(self):
         dialog = QtWidgets.QDialog(self)
         dialog.setWindowTitle(tr("customer_filter", "Customer Filter"))
-        dialog.resize(430, 520)
+        dialog.setMinimumSize(480, 590)
+        dialog.resize(500, 640)
+        dialog.setModal(True)
+        dialog.setStyleSheet("""
+            QDialog { background: #f6f8fc; }
+            QFrame#customerHeader {
+                background: #344CB7; border-radius: 14px;
+            }
+            QLabel#customerTitle {
+                color: #ffffff; background: transparent; border: none;
+                font-size: 20px; font-weight: 700; padding: 0px;
+            }
+            QLabel#customerSubtitle {
+                color: #eef2ff; background: transparent; border: none;
+                font-size: 12px; font-weight: 500; padding: 0px;
+            }
+            QLabel#selectionCount {
+                color: #344CB7; background: #e8edff; border-radius: 10px;
+                padding: 4px 10px; font-size: 12px; font-weight: 700;
+            }
+            QLineEdit {
+                min-height: 40px; padding: 0 14px; background: white;
+                color: #172554; border: 1px solid #d8deea; border-radius: 10px;
+                selection-background-color: #344CB7;
+            }
+            QLineEdit:focus { border: 2px solid #577BC1; }
+            QListWidget {
+                background: white; color: #1f2937; border: 1px solid #d8deea;
+                border-radius: 12px; padding: 6px; outline: none;
+            }
+            QListWidget::item { min-height: 36px; padding: 2px 8px; border-radius: 7px; }
+            QListWidget::item:hover { background: #f0f3ff; }
+            QListWidget::item:selected { background: #e8edff; color: #172554; }
+            QPushButton#secondaryButton {
+                min-height: 34px; padding: 0 13px; color: #344CB7;
+                background: white; border: 1px solid #cbd5e1; border-radius: 8px;
+                font-weight: 600;
+            }
+            QPushButton#secondaryButton:hover { background: #eef2ff; border-color: #818cf8; }
+            QPushButton#applyButton {
+                min-width: 100px; min-height: 36px; padding: 0 18px;
+                color: white; background: #344CB7; border: none;
+                border-radius: 9px; font-weight: 700;
+            }
+            QPushButton#applyButton:hover { background: #293b99; }
+            QPushButton#applyButton:disabled { background: #aeb8cf; }
+            QPushButton#cancelButton {
+                min-width: 88px; min-height: 36px; color: #475569;
+                background: transparent; border: none; font-weight: 600;
+            }
+            QPushButton#cancelButton:hover { background: #e9edf5; border-radius: 9px; }
+        """)
         layout = QtWidgets.QVBoxLayout(dialog)
+        layout.setContentsMargins(22, 22, 22, 20)
+        layout.setSpacing(14)
+
+        is_zh = get_translator().current_lang == "ZH_TW"
+        header = QtWidgets.QFrame()
+        header.setObjectName("customerHeader")
+        header_layout = QtWidgets.QVBoxLayout(header)
+        header_layout.setContentsMargins(20, 17, 20, 17)
+        header_layout.setSpacing(4)
+        title = QtWidgets.QLabel("篩選客戶" if is_zh else "Filter customers")
+        title.setObjectName("customerTitle")
+        subtitle = QtWidgets.QLabel(
+            "選擇要套用至所有分析的客戶" if is_zh
+            else "Choose the customers to include across all analyses"
+        )
+        subtitle.setObjectName("customerSubtitle")
+        header_layout.addWidget(title)
+        header_layout.addWidget(subtitle)
+        layout.addWidget(header)
+
+        summary_row = QtWidgets.QHBoxLayout()
+        section_label = QtWidgets.QLabel("客戶清單" if is_zh else "CUSTOMER LIST")
+        section_label.setStyleSheet("color: #64748b; font-size: 11px; font-weight: 700;")
+        count_label = QtWidgets.QLabel()
+        count_label.setObjectName("selectionCount")
+        summary_row.addWidget(section_label)
+        summary_row.addStretch()
+        summary_row.addWidget(count_label)
+        layout.addLayout(summary_row)
+
         search = QtWidgets.QLineEdit()
         search.setPlaceholderText(tr("search_customers", "Search customers..."))
+        search.setClearButtonEnabled(True)
         layout.addWidget(search)
         customer_list = QtWidgets.QListWidget()
-        for customer in self.available_customers:
-            item = QtWidgets.QListWidgetItem(customer)
-            item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(QtCore.Qt.CheckState.Checked if customer in self.selected_customers else QtCore.Qt.CheckState.Unchecked)
-            customer_list.addItem(item)
+        customer_list.setAlternatingRowColors(False)
         layout.addWidget(customer_list)
+
+        # An empty stored selection means "all customers" throughout the app.
+        initial_selection = set(self.selected_customers or self.available_customers)
+
+        def populate(customers, checked_names):
+            customer_list.blockSignals(True)
+            customer_list.clear()
+            for customer in customers:
+                item = QtWidgets.QListWidgetItem(customer)
+                item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsUserCheckable)
+                state = (QtCore.Qt.CheckState.Checked if customer in checked_names
+                         else QtCore.Qt.CheckState.Unchecked)
+                item.setCheckState(state)
+                customer_list.addItem(item)
+            customer_list.blockSignals(False)
 
         def filter_items(text):
             query = text.casefold()
+            visible = 0
             for index in range(customer_list.count()):
                 item = customer_list.item(index)
-                item.setHidden(query not in item.text().casefold())
+                matches = query in item.text().casefold()
+                item.setHidden(not matches)
+                visible += int(matches)
+            section_label.setText(
+                (f"客戶清單 · {visible} 筆" if is_zh else f"CUSTOMER LIST · {visible} RESULTS")
+                if query else ("客戶清單" if is_zh else "CUSTOMER LIST")
+            )
 
         search.textChanged.connect(filter_items)
         actions = QtWidgets.QHBoxLayout()
+        actions.setSpacing(8)
         all_button = QtWidgets.QPushButton(tr("select_all", "Select All"))
         clear_button = QtWidgets.QPushButton(tr("clear", "Clear"))
         refresh_button = QtWidgets.QPushButton(tr("refresh", "Refresh"))
+        for button in (all_button, clear_button, refresh_button):
+            button.setObjectName("secondaryButton")
         actions.addWidget(all_button)
         actions.addWidget(clear_button)
+        actions.addStretch()
         actions.addWidget(refresh_button)
         layout.addLayout(actions)
 
@@ -3509,18 +3731,51 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
             for index in range(customer_list.count()):
                 customer_list.item(index).setCheckState(check_state)
 
+        def checked_names():
+            return {customer_list.item(i).text() for i in range(customer_list.count())
+                    if customer_list.item(i).checkState() == QtCore.Qt.CheckState.Checked}
+
+        def update_count():
+            selected = len(checked_names())
+            total = customer_list.count()
+            count_label.setText(
+                f"已選 {selected} / {total}" if is_zh else f"{selected} of {total} selected"
+            )
+            apply_button.setEnabled(selected > 0 or total == 0)
+
+        def refresh_list():
+            current = checked_names()
+            self.available_customers, errors = discover_customers(self.raw_data_directory)
+            available = set(self.available_customers)
+            populate(self.available_customers, current & available)
+            filter_items(search.text())
+            update_count()
+            if errors:
+                QtWidgets.QMessageBox.warning(
+                    dialog, tr("customer_filter", "Customer Filter"),
+                    tr("customer_scan_errors", "Some CSV files could not be scanned ({count}).").format(count=len(errors)))
+
         all_button.clicked.connect(lambda: set_all(QtCore.Qt.CheckState.Checked))
         clear_button.clicked.connect(lambda: set_all(QtCore.Qt.CheckState.Unchecked))
-        refresh_button.clicked.connect(dialog.reject)
-        refresh_button.clicked.connect(lambda: self.refresh_customer_filter(scan=True))
-        refresh_button.clicked.connect(self.open_customer_filter_dialog)
-        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        refresh_button.clicked.connect(refresh_list)
+        customer_list.itemChanged.connect(update_count)
+        buttons = QtWidgets.QDialogButtonBox()
+        apply_button = buttons.addButton(
+            "套用篩選" if is_zh else "Apply filter",
+            QtWidgets.QDialogButtonBox.ButtonRole.AcceptRole)
+        cancel_button = buttons.addButton(
+            tr("cancel", "Cancel"), QtWidgets.QDialogButtonBox.ButtonRole.RejectRole)
+        apply_button.setObjectName("applyButton")
+        cancel_button.setObjectName("cancelButton")
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
+
+        populate(self.available_customers, initial_selection)
+        update_count()
+        search.setFocus()
         if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
-            checked = {customer_list.item(i).text() for i in range(customer_list.count())
-                       if customer_list.item(i).checkState() == QtCore.Qt.CheckState.Checked}
+            checked = checked_names()
             self.selected_customers = set() if checked == set(self.available_customers) else checked
             self._update_customer_filter_button()
 
@@ -4712,18 +4967,30 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                 'LCL': chart_info.get('LCL', 'N/A'),
                 'Target': chart_info.get('Target', 'N/A'),
                 'Resolution': chart_info.get('Resolution', 'N/A'),
+                'OOB_Status': OOB_CALCULATED,
                 'baseline_insufficient': baseline_insufficient,
                 'baseline_empty': baseline_empty,  # 新增標記
                 'data_type': 'discrete'
             }
 
-            if not baseline_insufficient and not baseline_empty:
-                # === OOC 計算 ===
-                print(" - _process_discrete_chart: 計算 OOC...")
-                weekly_df = pd.DataFrame({'point_val': weekly_data['point_val']})
-                ooc_results = ooc_calculator(weekly_df, chart_info.get('UCL'), chart_info.get('LCL'))
+            # OOC 只依賴當週資料與控制線，不應被 Baseline 是否足夠影響。
+            print(" - _process_discrete_chart: 計算 OOC...")
+            weekly_df = pd.DataFrame({'point_val': weekly_data['point_val']})
+            try:
+                ooc_results = ooc_calculator(
+                    weekly_df,
+                    chart_info.get('UCL'),
+                    chart_info.get('LCL'),
+                    chart_info.get('Characteristics'),
+                )
                 ooc_highlight = review_ooc_results(ooc_results[1], ooc_results[2])
                 result['ooc_cnt'] = ooc_results[1]
+            except Exception as e:
+                logger.exception("Discrete OOC calculation failed: %s", e)
+                ooc_highlight = OOB_ERROR
+                result['OOB_Status'] = OOB_ERROR
+
+            if not baseline_insufficient and not baseline_empty:
                 
                 # === 離散型 OOB 計算 ===
                 print(" - _process_discrete_chart: 計算離散型 OOB...")
@@ -4760,20 +5027,28 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                 print(f" - _process_discrete_chart: 離散型 OOB 計算完成")
                 
             else:
-                # 基線不足時設置所有 OOB 為 NO_HIGHLIGHT
+                # Baseline 指標明確標示未計算；OOC 保留獨立計算結果。
                 result.update({
-                    'HL_P95_shift': 'NO_HIGHLIGHT',
-                    'HL_P50_shift': 'NO_HIGHLIGHT',
-                    'HL_P05_shift': 'NO_HIGHLIGHT',
-                    'HL_sticking_shift': 'NO_HIGHLIGHT',
-                    'HL_trending': 'NO_HIGHLIGHT',
-                    'HL_high_OOC': 'NO_HIGHLIGHT',
-                    'HL_category_LT_shift': 'NO_HIGHLIGHT',
-                    'HL_record_high_low': 'NO_HIGHLIGHT',
+                    'HL_P95_shift': OOB_INSUFFICIENT_DATA,
+                    'HL_P50_shift': OOB_INSUFFICIENT_DATA,
+                    'HL_P05_shift': OOB_INSUFFICIENT_DATA,
+                    'HL_sticking_shift': OOB_INSUFFICIENT_DATA,
+                    'HL_trending': OOB_INSUFFICIENT_DATA,
+                    'HL_high_OOC': ooc_highlight,
+                    'HL_category_LT_shift': OOB_INSUFFICIENT_DATA,
+                    'HL_record_high_low': OOB_INSUFFICIENT_DATA,
                     'record_high': False,
-                    'record_low': False
+                    'record_low': False,
+                    'OOB_Status': OOB_ERROR if ooc_highlight == OOB_ERROR else OOB_INSUFFICIENT_DATA,
                 })
-                print(f" - _process_discrete_chart: 基線數據不足，所有 OOB 設為 NO_HIGHLIGHT")
+                print(f" - _process_discrete_chart: 基線數據不足，Baseline 指標設為 INSUFFICIENT_DATA，OOC 已獨立計算")
+
+            if result.get('OOB_Status') != OOB_ERROR:
+                metric_states = [result.get(key) for key in OOB_KEYS]
+                if OOB_ERROR in metric_states:
+                    result['OOB_Status'] = OOB_ERROR
+                elif OOB_INSUFFICIENT_DATA in metric_states:
+                    result['OOB_Status'] = OOB_INSUFFICIENT_DATA
 
             print(f" - _process_discrete_chart: 離散型處理完成 {group_name}/{chart_name}")
             return result
@@ -4791,7 +5066,23 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         result['HL_WE'] = 'HIGHLIGHT' if we_true_keys else 'NO_HIGHLIGHT'
 
         oob_true_keys = [k for k in OOB_KEYS if result.get(k) == 'HIGHLIGHT']
-        result['OOB_Rule'] = ', '.join(oob_true_keys) if oob_true_keys else 'N/A'
+        metric_states = [result.get(k) for k in OOB_KEYS]
+        if result.get('OOB_Status') not in (OOB_CALCULATED, OOB_INSUFFICIENT_DATA, OOB_ERROR):
+            if OOB_ERROR in metric_states:
+                result['OOB_Status'] = OOB_ERROR
+            elif OOB_INSUFFICIENT_DATA in metric_states:
+                result['OOB_Status'] = OOB_INSUFFICIENT_DATA
+            else:
+                result['OOB_Status'] = OOB_CALCULATED
+
+        if oob_true_keys:
+            result['OOB_Rule'] = ', '.join(oob_true_keys)
+        elif result['OOB_Status'] == OOB_ERROR:
+            result['OOB_Rule'] = OOB_ERROR
+        elif result['OOB_Status'] == OOB_INSUFFICIENT_DATA:
+            result['OOB_Rule'] = OOB_INSUFFICIENT_DATA
+        else:
+            result['OOB_Rule'] = 'N/A'
 
         for key in OOB_KEYS:
             result.pop(key, None)
@@ -4832,9 +5123,10 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         results_df = pd.DataFrame(self.results)
 
         # 確保所有預期的列都存在，包括新增的數據類型欄位
-        expected_cols = ['data_cnt', 'ooc_cnt', 'WE_Rule', 'OOB_Rule', 'data_type', 'Material_no',
+        expected_cols = ['data_cnt', 'ooc_cnt', 'WE_Rule', 'OOB_Rule', 'OOB_Status', 'data_type', 'Material_no',
                          'group_name', 'chart_name', 'chart_ID', 'Characteristics',
                          'USL', 'LSL', 'UCL', 'LCL', 'Target', 'Cpk', 'Resolution',
+                         'baseline_insufficient', 'baseline_empty',
                          'HL_record_high_low', 'record_high', 'record_low',
                          'chart_path', 'weekly_chart_path']
         for col in expected_cols:
@@ -5074,7 +5366,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                         </thead>
                         <tbody>
                             {''.join(self.create_table_row(key, result) for key in [
-                                'data_cnt', 'ooc_cnt', 'WE_Rule', 'OOB_Rule', 'data_type', 'Material_no',
+                                'data_cnt', 'ooc_cnt', 'WE_Rule', 'OOB_Rule', 'OOB_Status', 'data_type', 'Material_no',
                                 'group_name', 'chart_name', 'Cpk'
                             ])}
                         </tbody>

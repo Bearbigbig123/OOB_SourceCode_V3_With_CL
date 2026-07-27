@@ -770,35 +770,62 @@ class CLTightenCalculator:
 
     # === SOP 5: Control Limit Calculation ===
 
-    def get_k_value(self, N, characteristic, pattern='Normal', kurtosis_value=None):
+    def is_chart_younger_than_one_year(self, chart_create_time, reference_time=None):
+        """判斷 Chart 在參考日是否未滿一個曆年。
+
+        CHART_CREATE_TIME 缺失或無法解析時，依規則視為非新 Chart。
         """
-        SOP 5.2: 依資料筆數和特性決定 k 值
-        
-        ✅ 特殊邏輯：當 Kurtosis > 1 且 Pattern = Normal 時，各加 1 sigma
-        - N >= 30: 3σ → 4σ
-        - 16 <= N <= 29: 4σ → 5σ
-        - 4 <= N <= 15: 5σ → 6σ
+        if chart_create_time is None or pd.isna(chart_create_time):
+            return False
+
+        create_time = pd.to_datetime(chart_create_time, errors='coerce')
+        if pd.isna(create_time):
+            return False
+
+        # Excel 讀入值可能帶有時區；規則只比較日曆日期。
+        if getattr(create_time, 'tzinfo', None) is not None:
+            create_time = create_time.tz_localize(None)
+
+        reference_date = pd.Timestamp(
+            reference_time if reference_time is not None else pd.Timestamp.today()
+        )
+        if getattr(reference_date, 'tzinfo', None) is not None:
+            reference_date = reference_date.tz_localize(None)
+
+        one_year_ago = reference_date.normalize() - pd.DateOffset(years=1)
+        return create_time.normalize() > one_year_ago
+
+    def get_k_value(self, N, characteristic, pattern='Normal', kurtosis_value=None,
+                    chart_create_time=None):
         """
-        # 基礎 k 值
+        SOP 5.2: 依實際計算點數與 Chart 年齡決定 k 值。
+
+        - 4 <= N <= 15: 未滿一個曆年 8σ，否則 5σ
+        - 16 <= N <= 29: 固定 5σ
+        - N >= 30: 3σ；Normal 且 Kurtosis > 1 時加為 4σ
+        """
         if N >= 30:
             base_k = 3.0
-        elif 16 <= N <= 29: 
-            base_k = 4.0
-        elif 4 <= N <= 15: 
+        elif 16 <= N <= 29:
             base_k = 5.0
+        elif 4 <= N <= 15:
+            base_k = 8.0 if self.is_chart_younger_than_one_year(chart_create_time) else 5.0
         else:
             base_k = 3.0
-        
-        #  特殊邏輯：Kurtosis > 1 且 Pattern = Normal 時，加 1σ
-        if pattern == 'Normal' and kurtosis_value is not None and kurtosis_value > 1:
-            final_k = base_k + 1.0  # 各加 1σ：3→4, 4→5, 5→6
+
+        # Kurtosis +1σ 僅保留於 N >= 30。
+        if (N >= 30 and pattern == 'Normal' and
+                kurtosis_value is not None and kurtosis_value > 1):
+            final_k = base_k + 1.0
             print(f"    [Kurtosis +1σ] Pattern={pattern}, Kurtosis={kurtosis_value:.3f} > 1")
             print(f"    [Kurtosis +1σ] N={N}, Base k={base_k:.1f} → Final k={final_k:.1f}")
             return final_k
-        
+
+        print(f"    [K Value] N={N}, Chart Create Time={chart_create_time}, k={base_k:.1f}")
         return base_k
 
-    def calc_CL(self, values, pattern, resolution=None, characteristic='Nominal', kurtosis_value=None):
+    def calc_CL(self, values, pattern, resolution=None, characteristic='Nominal',
+                kurtosis_value=None, chart_create_time=None):
         """SOP 5.1 & 5.3: 計算 UCL/LCL"""
         N = len(values)
         if N < 4: 
@@ -807,7 +834,9 @@ class CLTightenCalculator:
         median_val = np.median(values)
         mean_val = np.mean(values)
         std_val = np.std(values, ddof=1)
-        k = self.get_k_value(N, characteristic, pattern, kurtosis_value)
+        k = self.get_k_value(
+            N, characteristic, pattern, kurtosis_value, chart_create_time
+        )
         
         # 預先計算 Robust Sigma 和 ECDF 3-sigma 備用值
         UR_robust, LR_robust = self.compute_robust_sigma(values)
@@ -1100,11 +1129,29 @@ class CLTightenCalculator:
 
     # === 核心流程包裝 ===
     
-    def process_chart(self, df, value_col, date_col, oos_col, characteristic):
+    def process_chart(self, df, value_col, date_col, oos_col, characteristic,
+                      chart_create_time=None):
         """主體 SOP 流程 (SOP 1-6)"""
         
         # 1. Data Integrity (SOP 1)
         values_orig, resolution = self.data_integrity(df.copy(), date_col, value_col, oos_col)
+
+        # Constant 等資料無法從點值差異估算 resolution 時，使用 Chart 設定值。
+        configured_resolution = (
+            df['Resolution'].iloc[0]
+            if 'Resolution' in df.columns and len(df) > 0
+            else np.nan
+        )
+        if (resolution is None or pd.isna(resolution) or resolution <= 0):
+            configured_resolution = pd.to_numeric(
+                pd.Series([configured_resolution]), errors='coerce'
+            ).iloc[0]
+            if pd.notna(configured_resolution) and configured_resolution > 0:
+                resolution = float(configured_resolution)
+                print(
+                    "    [Resolution] 無法由數據估算，"
+                    f"改用 Chart 設定值 {resolution}"
+                )
         
         # 檢查是否有有效數據
         if len(values_orig) == 0:
@@ -1214,6 +1261,36 @@ class CLTightenCalculator:
 
         if rule_satisfied:
             print(f"    [Debug] Hard Rule 滿足: {rule_applied_name}")
+
+            # 4-29 點依所選 k 值向外擴張 Hard Rule 管制線。
+            # N >= 30 維持既有 Hard Rule，不套用 resolution 擴張。
+            hard_rule_k = self.get_k_value(
+                len(values_orig),
+                characteristic,
+                pattern=rule_applied_name,
+                kurtosis_value=None,
+                chart_create_time=chart_create_time
+            )
+            resolution_units = 0
+            if resolution is not None and not pd.isna(resolution) and resolution > 0:
+                if hard_rule_k == 5.0:
+                    resolution_units = 1
+                elif hard_rule_k == 8.0:
+                    resolution_units = 2
+
+            if resolution_units:
+                expansion = resolution_units * resolution
+                UCL_hr += expansion
+                LCL_hr -= expansion
+                print(
+                    f"    [Hard Rule Resolution] k={hard_rule_k:.1f}σ，"
+                    f"向外擴張 {resolution_units}×resolution ({expansion:.10f})"
+                )
+            else:
+                print(
+                    f"    [Hard Rule Resolution] k={hard_rule_k:.1f}σ，"
+                    "不套用 resolution 擴張"
+                )
             
             # 根據特性類型決定使用 Hard Rule 的哪些管制線
             if characteristic == 'Bigger':
@@ -1357,25 +1434,6 @@ class CLTightenCalculator:
                 ori_lower_ooc = np.sum(values_orig < original_lcl)
                 ori_ooc_count = ori_upper_ooc + ori_lower_ooc
             
-            # 計算 Static/Final OOC Count (使用 Hard Rule 的管制線)
-            static_ooc_count = 0
-            static_upper_ooc = np.sum(values_orig > suggest_ucl_hr)
-            static_lower_ooc = np.sum(values_orig < suggest_lcl_hr)
-            static_ooc_count = static_upper_ooc + static_lower_ooc
-            
-            # 計算 Ori OOC Count (使用原始管制線)
-            ori_ooc_count = 0
-            if not (pd.isna(original_ucl) or pd.isna(original_lcl)):
-                ori_upper_ooc = np.sum(values_orig > original_ucl)
-                ori_lower_ooc = np.sum(values_orig < original_lcl)
-                ori_ooc_count = ori_upper_ooc + ori_lower_ooc
-            
-            # 計算 Static/Final OOC Count (使用 Hard Rule 的管制線)
-            static_ooc_count = 0
-            static_upper_ooc = np.sum(values_orig > suggest_ucl_hr)
-            static_lower_ooc = np.sum(values_orig < suggest_lcl_hr)
-            static_ooc_count = static_upper_ooc + static_lower_ooc
-            
             # 📐 [Bug Fix] Hard Rule 與 SOP 6.6 的邏輯衝突檢查
             # 確保 Hard Rule 也遵守「只能收緊、不能放寬」原則
             clamped = False  # 追蹤是否發生 clamp
@@ -1399,11 +1457,6 @@ class CLTightenCalculator:
                         suggest_lcl_hr = original_lcl
                         clamped = True
                 
-                # ⚠️ 關鍵：如果發生了 clamp（界限變寬），強制 tighten_needed = False
-                if clamped:
-                    tighten_needed_hr = False
-                    print(f"    [Warning] 檢測到管制線變寬，強制設定 TightenNeeded = False")
-                
                 # 重新計算 cl_center 和 tolerance（因可能被 clamp 過）
                 cl_center_hr = (suggest_ucl_hr + suggest_lcl_hr) / 2
                 
@@ -1413,10 +1466,50 @@ class CLTightenCalculator:
                     new_tol = suggest_ucl_hr - anchor
                 elif characteristic == 'Bigger':
                     new_tol = anchor - suggest_lcl_hr
+
+                # Clamp 後必須以最終管制線重新判斷 TightenNeeded。
+                if rule_applied_name == "Hard Rule 1: Constant/Near Constant":
+                    eps = 1e-10
+                    if characteristic == 'Nominal':
+                        tighten_needed_hr = (
+                            suggest_ucl_hr < original_ucl - eps or
+                            suggest_lcl_hr > original_lcl + eps
+                        )
+                    elif characteristic == 'Smaller':
+                        tighten_needed_hr = suggest_ucl_hr < original_ucl - eps
+                    elif characteristic == 'Bigger':
+                        tighten_needed_hr = suggest_lcl_hr > original_lcl + eps
+                elif rule_applied_name in [
+                    "Hard Rule 2: Two Categories",
+                    "Hard Rule 3: Three Categories Spaced by Resolution"
+                ]:
+                    if original_tol > 1e-9 and new_tol > 1e-9:
+                        tighten_needed_hr, diff_ratio, tighten_threshold = (
+                            self.check_tighten_with_details(
+                                original_tol, new_tol, len(values_orig)
+                            )
+                        )
+                    else:
+                        tighten_needed_hr = False
+                        diff_ratio = np.nan
+                        _, _, tighten_threshold = self.check_tighten_with_details(
+                            0, 0, len(values_orig)
+                        )
+
+                if clamped:
+                    print(
+                        "    [Hard Rule Clamp] 已依最終管制線重新計算 "
+                        f"TightenNeeded={tighten_needed_hr}"
+                    )
+
+            # 使用最終（含 resolution 與 clamp）管制線重新計算 OOC。
+            static_upper_ooc = np.sum(values_orig > suggest_ucl_hr)
+            static_lower_ooc = np.sum(values_orig < suggest_lcl_hr)
+            static_ooc_count = static_upper_ooc + static_lower_ooc
             
-            # ⚠️ Hard Rule 返回前：特別說明不套用 Resolution 精度修正
+            # Hard Rule 不做小數位取整；resolution 僅用於上述明確的向外擴張。
             print(f"\n    [Hard Rule Return] Pattern: {rule_applied_name}")
-            print(f"    [Hard Rule Return] ⚠️ Hard Rule 不套用 Resolution 精度修正（避免造成 OOC）")
+            print(f"    [Hard Rule Return] 不套用額外的 Resolution 精度取整")
             print(f"    [Hard Rule Return] Suggest UCL: {suggest_ucl_hr:.10f}")
             print(f"    [Hard Rule Return] Suggest LCL: {suggest_lcl_hr:.10f}\n")
             
@@ -1541,7 +1634,8 @@ class CLTightenCalculator:
 
         # 5. Statistical Model Fitting (SOP 5)
         UCL_static, LCL_static, UR_robust, LR_robust, UCL3_ecdf, LCL3_ecdf, Sug_USL, Sug_LSL = self.calc_CL(
-            values_filtered, pattern, resolution, characteristic, kurtosis_value
+            values_filtered, pattern, resolution, characteristic, kurtosis_value,
+            chart_create_time
         )
         
         # 應用 resolution 調整到 Sug USL/LSL
@@ -1924,6 +2018,8 @@ class CLTightenCalculator:
                 df_charts['tsmc_ucl'] = np.nan
             if 'tsmc_lcl' not in df_charts.columns:
                 df_charts['tsmc_lcl'] = np.nan
+            if 'CHART_CREATE_TIME' not in df_charts.columns:
+                df_charts['CHART_CREATE_TIME'] = pd.NaT
                 
             # Target, UCL, LCL 為必須欄位
             required_columns = ['Target', 'UCL', 'LCL']
@@ -2001,7 +2097,7 @@ class CLTightenCalculator:
         import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
 
-        #  修復問題2: 檢查空數據，避免閃退
+        # 檢查空數據，避免閃退
         if chart_data is None or len(chart_data) == 0:
             print(f"    [Warning] chart_data 為空，無法繪製圖表")
             return None
@@ -2009,11 +2105,38 @@ class CLTightenCalculator:
         if 'value' not in chart_data.columns:
             print(f"    [Warning] chart_data 缺少 'value' 欄位，無法繪製圖表")
             return None
-        
-        # 確保有有效數據點
-        valid_data = chart_data['value'].dropna()
-        if len(valid_data) == 0:
-            print(f"    [Warning] chart_data 沒有有效的數據點，無法繪製圖表")
+
+        # 繪圖與計算使用相同的有效資料：排除空值、非數字、Inf 與無效日期。
+        original_count = len(chart_data)
+        chart_data = chart_data.copy()
+        chart_data['value'] = pd.to_numeric(chart_data['value'], errors='coerce')
+        chart_data['value'] = chart_data['value'].replace(
+            [np.inf, -np.inf], np.nan
+        )
+        invalid_value_count = int(chart_data['value'].isna().sum())
+
+        required_columns = ['value']
+        invalid_date_count = 0
+        if 'date' in chart_data.columns:
+            chart_data['date'] = pd.to_datetime(chart_data['date'], errors='coerce')
+            invalid_date_count = int(chart_data['date'].isna().sum())
+            required_columns.append('date')
+
+        chart_data = (
+            chart_data
+            .dropna(subset=required_columns)
+            .reset_index(drop=True)
+        )
+        removed_count = original_count - len(chart_data)
+        print(
+            "    [Plot Data Clean] "
+            f"原始={original_count}, 無效數值={invalid_value_count}, "
+            f"無效日期={invalid_date_count}, 排除={removed_count}, "
+            f"最終繪圖={len(chart_data)}"
+        )
+
+        if len(chart_data) == 0:
+            print(f"    [Warning] chart_data 清理後沒有有效數據點，無法繪製圖表")
             return None
 
         os.makedirs(output_dir, exist_ok=True)
@@ -2035,7 +2158,7 @@ class CLTightenCalculator:
         
         if 'date' in chart_data.columns:
             # 轉換日期並使用統一格式 yyyy/m/d hh:mm
-            dates = pd.to_datetime(chart_data['date'])
+            dates = chart_data['date']
             date_format = '%Y/%m/%d %H:%M'
 
             # 設定 X 軸標籤為實際時間，但位置是等距的
@@ -2387,6 +2510,8 @@ class CLTightenCalculator:
         raw_data_df['LCL'] = chart_info_row.get('LCL')
         raw_data_df['tsmc_ucl'] = chart_info_row.get('tsmc_ucl', np.nan)
         raw_data_df['tsmc_lcl'] = chart_info_row.get('tsmc_lcl', np.nan)
+        raw_data_df['Resolution'] = chart_info_row.get('Resolution', np.nan)
+        chart_create_time = chart_info_row.get('CHART_CREATE_TIME', pd.NaT)
         
         # 3. 動態計算 oos_flag - 根據特性類型決定檢查哪個規格限
         characteristic = chart_info_row.get('Characteristics', 'Nominal')
@@ -2432,7 +2557,8 @@ class CLTightenCalculator:
                 value_col='value',
                 date_col='date',
                 oos_col='oos_flag',
-                characteristic=chart_info_row.get('Characteristics', 'Nominal')
+                characteristic=chart_info_row.get('Characteristics', 'Nominal'),
+                chart_create_time=chart_create_time
             )
             
             # 5. 格式化輸出
