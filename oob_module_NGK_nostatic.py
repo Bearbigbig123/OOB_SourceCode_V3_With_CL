@@ -31,7 +31,11 @@ from PyQt6.QtCore import QDateTime
 from PyQt6.QtWidgets import QMessageBox, QLabel, QVBoxLayout, QScrollArea, QGridLayout, QPushButton, QDateTimeEdit, QDateEdit, QHBoxLayout
 from PIL import Image
 from PIL.ImageQt import ImageQt
-plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei', 'SimHei', 'Arial Unicode MS', 'Noto Sans CJK TC']
+plt.rcParams['font.sans-serif'] = [
+    'Microsoft JhengHei', 'Yu Gothic', 'Meiryo', 'Malgun Gothic',
+    'Noto Sans CJK TC', 'Noto Sans CJK JP', 'Noto Sans CJK KR',
+    'SimHei', 'Arial Unicode MS'
+]
 plt.rcParams['axes.unicode_minus'] = False  # 正確顯示負號
 
 OOB_CALCULATED = 'CALCULATED'
@@ -181,15 +185,22 @@ class OOBSettingsDialog(QtWidgets.QDialog):
         from translations import tr
         
         self.setWindowTitle(tr("chart_processing_settings"))
-        self.setMinimumWidth(600)
-        self.setMinimumHeight(400)
+        self.setMinimumWidth(720)
+        self.setMinimumHeight(520)
+        self.setObjectName("OOBSettingsDialog")
         
         main_layout = QtWidgets.QVBoxLayout(self)
         main_layout.setSpacing(15)
-        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setContentsMargins(24, 22, 24, 22)
+
+        self.settings_intro_label = QtWidgets.QLabel(tr("oob_settings_intro"))
+        self.settings_intro_label.setObjectName("SettingsIntro")
+        self.settings_intro_label.setWordWrap(True)
+        main_layout.addWidget(self.settings_intro_label)
         
         # === 圖表顯示設定 ===
         display_group = QtWidgets.QGroupBox(tr("display_settings"))
+        display_group.setObjectName("SettingsCard")
         display_layout = QtWidgets.QVBoxLayout(display_group)
         display_layout.setSpacing(10)
         
@@ -204,11 +215,38 @@ class OOBSettingsDialog(QtWidgets.QDialog):
         self.use_batch_id_labels_checkbox = ToggleSwitch(label_text=tr("use_batch_id_labels"))
         self.use_batch_id_labels_checkbox.setChecked(False)
         display_layout.addWidget(self.use_batch_id_labels_checkbox)
+
+        # 開啟後，既有兩張圖加上兩張 By Tool 時間圖，合計四張。
+        self.show_by_tool_checkbox = ToggleSwitch(label_text=tr("show_by_tool_charts"))
+        self.show_by_tool_checkbox.setChecked(False)
+        display_layout.addWidget(self.show_by_tool_checkbox)
+        self.show_by_tool_help_label = QtWidgets.QLabel(tr("show_by_tool_help"))
+        self.show_by_tool_help_label.setObjectName("SettingsHelp")
+        self.show_by_tool_help_label.setWordWrap(True)
+        display_layout.addWidget(self.show_by_tool_help_label)
         
         main_layout.addWidget(display_group)
+
+        self.oob_rule_group = QtWidgets.QGroupBox(tr("oob_rule_settings"))
+        self.oob_rule_group.setObjectName("SettingsCard")
+        oob_rule_layout = QtWidgets.QVBoxLayout(self.oob_rule_group)
+        oob_rule_layout.setSpacing(8)
+
+        self.record_high_low_checkbox = ToggleSwitch(
+            label_text=tr("enable_record_high_low")
+        )
+        self.record_high_low_checkbox.setChecked(False)
+        oob_rule_layout.addWidget(self.record_high_low_checkbox)
+
+        self.record_high_low_help_label = QtWidgets.QLabel(tr("record_high_low_help"))
+        self.record_high_low_help_label.setObjectName("SettingsHelp")
+        self.record_high_low_help_label.setWordWrap(True)
+        oob_rule_layout.addWidget(self.record_high_low_help_label)
+        main_layout.addWidget(self.oob_rule_group)
         
         # === 時間範圍設定 ===
         time_range_group = QtWidgets.QGroupBox(tr("custom_time_range"))
+        time_range_group.setObjectName("SettingsCard")
         time_range_layout = QtWidgets.QVBoxLayout(time_range_group)
         time_range_layout.setSpacing(10)
         
@@ -326,17 +364,66 @@ class OOBSettingsDialog(QtWidgets.QDialog):
         button_layout.addStretch()
         
         self.cancel_btn = QtWidgets.QPushButton(tr("cancel"))
+        self.cancel_btn.setObjectName("SecondaryDialogButton")
         self.cancel_btn.setMinimumWidth(100)
         self.cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(self.cancel_btn)
         
         self.ok_btn = QtWidgets.QPushButton(tr("save"))
+        self.ok_btn.setObjectName("PrimaryDialogButton")
         self.ok_btn.setMinimumWidth(100)
         self.ok_btn.setDefault(True)
         self.ok_btn.clicked.connect(self.accept)
         button_layout.addWidget(self.ok_btn)
         
         main_layout.addLayout(button_layout)
+
+        self.setStyleSheet("""
+            QDialog#OOBSettingsDialog { background-color: #F8FAFC; }
+            QDialog#OOBSettingsDialog QLabel,
+            QDialog#OOBSettingsDialog QCheckBox {
+                background-color: transparent;
+            }
+            QLabel#SettingsIntro {
+                color: #64748B; font-size: 13px; font-weight: 400;
+                background: transparent; padding: 0 2px 4px 2px;
+            }
+            QGroupBox#SettingsCard {
+                background-color: white;
+                border: 1px solid #E2E8F0;
+                border-radius: 14px;
+                margin-top: 12px;
+                padding: 14px;
+                color: #0F172A;
+                font-size: 14px;
+                font-weight: 700;
+            }
+            QGroupBox#SettingsCard::title {
+                subcontrol-origin: margin;
+                left: 14px;
+                padding: 0 6px;
+                background-color: #FFFFFF;
+            }
+            QLabel#SettingsHelp {
+                color: #64748B;
+                background: transparent;
+                font-size: 11px;
+                font-weight: 400;
+                padding-left: 60px;
+            }
+            QPushButton#SecondaryDialogButton {
+                background-color: white; color: #334155;
+                border: 1px solid #CBD5E1; border-radius: 9px;
+                padding: 9px 18px; font-weight: 650;
+            }
+            QPushButton#SecondaryDialogButton:hover { background-color: #F1F5F9; }
+            QPushButton#PrimaryDialogButton {
+                background-color: #4F46E5; color: white;
+                border: none; border-radius: 9px;
+                padding: 9px 20px; font-weight: 700;
+            }
+            QPushButton#PrimaryDialogButton:hover { background-color: #4338CA; }
+        """)
     
     def _toggle_time_range_controls(self, checked):
         """ 啟用/停用時間範圍控制 """
@@ -378,6 +465,8 @@ class OOBSettingsDialog(QtWidgets.QDialog):
             'show_charts_gui': self.display_gui_checkbox.isChecked(),
             'use_interactive_charts': self.interactive_charts_checkbox.isChecked(),
             'use_batch_id_labels': self.use_batch_id_labels_checkbox.isChecked(),
+            'show_by_tool_charts': self.show_by_tool_checkbox.isChecked(),
+            'enable_record_high_low': self.record_high_low_checkbox.isChecked(),
             'custom_time_range_enabled': self.custom_time_range_checkbox.isChecked(),
             'start_time': self.start_datetime_edit.date(),
             'end_time': self.end_datetime_edit.date()
@@ -391,6 +480,11 @@ class OOBSettingsDialog(QtWidgets.QDialog):
             self.interactive_charts_checkbox.setChecked(settings['use_interactive_charts'])
         if 'use_batch_id_labels' in settings:
             self.use_batch_id_labels_checkbox.setChecked(settings['use_batch_id_labels'])
+        if 'show_by_tool_charts' in settings:
+            self.show_by_tool_checkbox.setChecked(settings['show_by_tool_charts'])
+        self.record_high_low_checkbox.setChecked(
+            settings.get('enable_record_high_low', False)
+        )
         if 'custom_time_range_enabled' in settings:
             self.custom_time_range_checkbox.setChecked(settings['custom_time_range_enabled'])
         if 'start_time' in settings:
@@ -415,6 +509,12 @@ class OOBSettingsDialog(QtWidgets.QDialog):
         self.display_gui_checkbox.setText(tr("show_charts_gui"))
         self.interactive_charts_checkbox.setText(tr("use_interactive_charts"))
         self.use_batch_id_labels_checkbox.setText(tr("use_batch_id_labels"))
+        self.show_by_tool_checkbox.setText(tr("show_by_tool_charts"))
+        self.show_by_tool_help_label.setText(tr("show_by_tool_help"))
+        self.oob_rule_group.setTitle(tr("oob_rule_settings"))
+        self.record_high_low_checkbox.setText(tr("enable_record_high_low"))
+        self.record_high_low_help_label.setText(tr("record_high_low_help"))
+        self.settings_intro_label.setText(tr("oob_settings_intro"))
         self.custom_time_range_checkbox.setText(tr("enable_custom_time_range"))
         self.start_time_label.setText(tr("start_time"))
         self.end_time_label.setText(tr("end_time"))
@@ -431,11 +531,15 @@ class OOBSettingsDialog(QtWidgets.QDialog):
 def get_app_font(size=9, weight=QtGui.QFont.Weight.Normal):
     """
     返回統一的應用程序字體
-    字體優先級：Segoe UI (英文) -> Microsoft JhengHei (繁體中文)
+    字體優先級：Segoe UI -> 繁中 / 日文 / 韓文字型
     """
     font = QtGui.QFont()
     # 設置字體家族列表
-    font.setFamilies(["Segoe UI", "Microsoft JhengHei", "sans-serif"])
+    font.setFamilies([
+        "Segoe UI", "Microsoft JhengHei", "Yu Gothic UI", "Malgun Gothic",
+        "Meiryo UI", "Noto Sans CJK TC", "Noto Sans CJK JP",
+        "Noto Sans CJK KR", "sans-serif"
+    ])
     font.setPointSize(size)
     font.setWeight(weight)
     return font
@@ -586,11 +690,12 @@ def format_and_clean_data(raw_df, chart_info):
     raw_df.loc[~np.isfinite(raw_df['point_val']), 'point_val'] = np.nan
 
     # 性能優化：使用向量化操作代替 apply
-    raw_df['point_time'] = pd.to_datetime(
-        raw_df['point_time'], 
-        format='%Y/%m/%d %H:%M', 
-        errors='coerce'
-    )
+    if not pd.api.types.is_datetime64_any_dtype(raw_df['point_time']):
+        raw_df['point_time'] = pd.to_datetime(
+            raw_df['point_time'],
+            format='%Y/%m/%d %H:%M',
+            errors='coerce'
+        )
     
     # CHART_CREATE_TIME 為可選欄位
     if 'CHART_CREATE_TIME' in chart_info and pd.notna(chart_info['CHART_CREATE_TIME']):
@@ -676,6 +781,10 @@ def preprocess_data(chart_info, raw_df):
             columns_to_keep.append('Batch_ID')
         if 'Customer' in raw_df.columns:
             columns_to_keep.append('Customer')
+        # By Tool 圖同時支援新舊 rawdata 欄位名稱。
+        for tool_column in ('Matching', 'Tool'):
+            if tool_column in raw_df.columns:
+                columns_to_keep.append(tool_column)
         raw_df = raw_df[columns_to_keep]
         
         
@@ -806,6 +915,28 @@ def record_high_low_calculator(current_week_data, historical_data):
             'record_low': False,
             'highlight_status': OOB_ERROR
         }
+
+
+def optional_record_high_low_calculator(
+    current_week_data,
+    historical_data,
+    enabled=False,
+    data_available=True,
+):
+    """Run Record High/Low only when the optional OOB rule is enabled."""
+    if not enabled:
+        return {
+            'record_high': False,
+            'record_low': False,
+            'highlight_status': 'NO_HIGHLIGHT',
+        }
+    if not data_available:
+        return {
+            'record_high': False,
+            'record_low': False,
+            'highlight_status': OOB_INSUFFICIENT_DATA,
+        }
+    return record_high_low_calculator(current_week_data, historical_data)
 def review_kshift_results(results, resolution, characteristic, data_percentiles, base_percentiles):
     # 設定 highlight 的初始值
     highlight_conditions = {key: 'NO_HIGHLIGHT' for key in ['P95_shift', 'P50_shift', 'P05_shift']}
@@ -1079,32 +1210,47 @@ def kshift_sigma_ratio_calculator(base, data, characteristic, resolution, ucl, l
         p50k_percentile = safe_division(base_percentiles.get('P99.865', np.nan) - base_percentiles.get('P0.135', np.nan), 6)
         p05k_percentile = safe_division(base_percentiles.get('P50', np.nan) - base_percentiles.get('P0.135', np.nan), 3)
         
-        # P95 分母計算：需要 UCL
-        if ucl_valid:
-            p95k_ucl = safe_division(ucl - base_percentiles.get('P50', np.nan), 6)
-            p95k_deno = np.round(np.max([p95k_percentile, p95k_ucl]), 8)
-            print(f"  kshift: P95 分母使用 max(百分位數={p95k_percentile}, UCL計算={p95k_ucl}) = {p95k_deno}")
+        if ucl_valid and not lcl_valid:
+            # 單邊 UCL：P95/P50/P05 都以 (UCL - Base P50) / 6
+            # 與各自的基線百分位分母取較大值。
+            single_side_deno = safe_division(ucl - base_percentiles.get('P50', np.nan), 6)
+            p95k_deno = np.round(np.max([p95k_percentile, single_side_deno]), 8)
+            p50k_deno = np.round(np.max([p50k_percentile, single_side_deno]), 8)
+            p05k_deno = np.round(np.max([p05k_percentile, single_side_deno]), 8)
+            print(f"  kshift: 僅 UCL 有效，三個分母各自與 UCL 單邊分母 {single_side_deno} 取 max")
+        elif lcl_valid and not ucl_valid:
+            # 單邊 LCL：P95/P50/P05 都以 (Base P50 - LCL) / 6
+            # 與各自的基線百分位分母取較大值。
+            single_side_deno = safe_division(base_percentiles.get('P50', np.nan) - lcl, 6)
+            p95k_deno = np.round(np.max([p95k_percentile, single_side_deno]), 8)
+            p50k_deno = np.round(np.max([p50k_percentile, single_side_deno]), 8)
+            p05k_deno = np.round(np.max([p05k_percentile, single_side_deno]), 8)
+            print(f"  kshift: 僅 LCL 有效，三個分母各自與 LCL 單邊分母 {single_side_deno} 取 max")
         else:
-            p95k_deno = np.round(p95k_percentile, 8)
-            print(f"  kshift: UCL 無效，P95 分母直接使用百分位數 = {p95k_deno}")
-        
-        # P50 分母計算：需要 UCL 和 LCL
-        if ucl_valid and lcl_valid:
-            p50k_ucl_lcl = safe_division(ucl - lcl, 12)
-            p50k_deno = np.round(np.max([p50k_percentile, p50k_ucl_lcl]), 8)
-            print(f"  kshift: P50 分母使用 max(百分位數={p50k_percentile}, UCL-LCL計算={p50k_ucl_lcl}) = {p50k_deno}")
-        else:
-            p50k_deno = np.round(p50k_percentile, 8)
-            print(f"  kshift: UCL/LCL 無效，P50 分母直接使用百分位數 = {p50k_deno}")
-        
-        # P05 分母計算：需要 LCL
-        if lcl_valid:
-            p05k_lcl = safe_division(base_percentiles.get('P50', np.nan) - lcl, 6)
-            p05k_deno = np.round(np.max([p05k_percentile, p05k_lcl]), 8)
-            print(f"  kshift: P05 分母使用 max(百分位數={p05k_percentile}, LCL計算={p05k_lcl}) = {p05k_deno}")
-        else:
-            p05k_deno = np.round(p05k_percentile, 8)
-            print(f"  kshift: LCL 無效，P05 分母直接使用百分位數 = {p05k_deno}")
+            # 雙邊都有或雙邊都沒有時，維持原本的分母算法。
+            if ucl_valid:
+                p95k_ucl = safe_division(ucl - base_percentiles.get('P50', np.nan), 6)
+                p95k_deno = np.round(np.max([p95k_percentile, p95k_ucl]), 8)
+                print(f"  kshift: P95 分母使用 max(百分位數={p95k_percentile}, UCL計算={p95k_ucl}) = {p95k_deno}")
+            else:
+                p95k_deno = np.round(p95k_percentile, 8)
+                print(f"  kshift: UCL 無效，P95 分母直接使用百分位數 = {p95k_deno}")
+
+            if ucl_valid and lcl_valid:
+                p50k_ucl_lcl = safe_division(ucl - lcl, 12)
+                p50k_deno = np.round(np.max([p50k_percentile, p50k_ucl_lcl]), 8)
+                print(f"  kshift: P50 分母使用 max(百分位數={p50k_percentile}, UCL-LCL計算={p50k_ucl_lcl}) = {p50k_deno}")
+            else:
+                p50k_deno = np.round(p50k_percentile, 8)
+                print(f"  kshift: UCL/LCL 無效，P50 分母直接使用百分位數 = {p50k_deno}")
+
+            if lcl_valid:
+                p05k_lcl = safe_division(base_percentiles.get('P50', np.nan) - lcl, 6)
+                p05k_deno = np.round(np.max([p05k_percentile, p05k_lcl]), 8)
+                print(f"  kshift: P05 分母使用 max(百分位數={p05k_percentile}, LCL計算={p05k_lcl}) = {p05k_deno}")
+            else:
+                p05k_deno = np.round(p05k_percentile, 8)
+                print(f"  kshift: LCL 無效，P05 分母直接使用百分位數 = {p05k_deno}")
 
         # YC edit：分母為 0 時的處理邏輯
         if p95k_deno == 0:
@@ -1780,7 +1926,15 @@ def category_lt_shift_calculator(base_data, weekly_data, threshold=0.7):
     return result
 
 
-def process_single_chart(chart_info, raw_df, initial_baseline_start_date, baseline_end_date, weekly_start_date, weekly_end_date):
+def process_single_chart(
+    chart_info,
+    raw_df,
+    initial_baseline_start_date,
+    baseline_end_date,
+    weekly_start_date,
+    weekly_end_date,
+    enable_record_high_low=False,
+):
     print("--- 進入外部 process_single_chart 函數 ---")
     print(f"  接收到的 raw_df shape: {raw_df.shape}")
     print(f"  週數據範圍: {weekly_start_date} 至 {weekly_end_date}")
@@ -1924,12 +2078,19 @@ def process_single_chart(chart_info, raw_df, initial_baseline_start_date, baseli
         trending_results = trending(raw_df, weekly_start_date, weekly_end_date, actual_baseline_start_date, baseline_end_date) if not baseline_insufficient and not baseline_empty else OOB_INSUFFICIENT_DATA
         print(f"  trending 返回: {trending_results}")
 
-        print("  正在呼叫 record_high_low_calculator...")
-        logger.debug("基線時間範圍 - 從 %s 到 %s", actual_baseline_start_date, baseline_end_date)
-        logger.debug("當週時間範圍 - 從 %s 到 %s", weekly_start_date, weekly_end_date)
-        logger.debug("基線結束與當週開始間隔 = %s", weekly_start_date - baseline_end_date)
-        # 計算當週數據是否創下歷史新高或新低
-        record_results = record_high_low_calculator(weekly_data['point_val'].values, baseline_data['point_val'].values) if not baseline_insufficient and not baseline_empty else {'highlight_status': OOB_INSUFFICIENT_DATA, 'record_high': False, 'record_low': False}
+        if enable_record_high_low:
+            print("  正在呼叫 record_high_low_calculator...")
+            logger.debug("基線時間範圍 - 從 %s 到 %s", actual_baseline_start_date, baseline_end_date)
+            logger.debug("當週時間範圍 - 從 %s 到 %s", weekly_start_date, weekly_end_date)
+            logger.debug("基線結束與當週開始間隔 = %s", weekly_start_date - baseline_end_date)
+        else:
+            print("  Record High/Low 判定已關閉。")
+        record_results = optional_record_high_low_calculator(
+            weekly_data['point_val'].values,
+            baseline_data['point_val'].values,
+            enabled=enable_record_high_low,
+            data_available=not baseline_insufficient and not baseline_empty,
+        )
         print(f"  record_high_low_calculator 返回: {record_results}")
 
         # 判斷是否需要 highlight (任何一個子指標需要高亮，則總體高亮)
@@ -2139,7 +2300,24 @@ def calculate_cpk(raw_df, chart_info):
         cpk = round(cpk, 3)  # 統一四捨五入到小數第三位
 
     return {'Cpk': cpk}
-def plot_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date, debug=False):
+def precompute_weekly_rule_results(raw_df, chart_info, weekly_start_date, weekly_end_date):
+    """Compute each weekly point's WE/CU rules once for all chart renderers."""
+    prepared = raw_df.copy()
+    prepared['point_time'] = pd.to_datetime(prepared['point_time'])
+    prepared = prepared.sort_values('point_time').reset_index(drop=True)
+    ws = pd.to_datetime(weekly_start_date)
+    we = pd.to_datetime(weekly_end_date)
+    weekly_indices = prepared[
+        (prepared['point_time'] >= ws) & (prepared['point_time'] <= we)
+    ].index
+    return {
+        int(index): check_rules(prepared.iloc[:index + 1].tail(15).copy(), chart_info)
+        for index in weekly_indices
+    }
+
+
+def plot_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date, debug=False,
+                   precomputed_rule_results=None):
     import os
     import numpy as np
     import matplotlib.pyplot as plt
@@ -2192,7 +2370,11 @@ def plot_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date, debug
     for i in range(start_index, end_index + 1):
         data_subset = raw_df.iloc[:i+1].tail(15)
         if not data_subset.empty:
-            rules = check_rules(data_subset.copy(), chart_info)
+            rules = (
+                precomputed_rule_results.get(i, {})
+                if precomputed_rule_results is not None
+                else check_rules(data_subset.copy(), chart_info)
+            )
             for rule, violated in rules.items():
                 if violated:
                     violated_rules[rule] = True
@@ -2226,7 +2408,9 @@ def plot_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date, debug
     plt.close()
 
     return image_path, violated_rules
-def plot_spc_chart_interactive(raw_df, chart_info, weekly_start_date, weekly_end_date, record_results=None, debug=False, use_batch_id_labels=False):
+def plot_spc_chart_interactive(raw_df, chart_info, weekly_start_date, weekly_end_date,
+                               record_results=None, debug=False, use_batch_id_labels=False,
+                               precomputed_rule_results=None):
     """
     建立互動式 SPC 圖表，返回 FigureCanvas 而不是儲存圖片
     支援滑鼠懸停 tooltip 顯示時間、數值、WE rule 資訊、Record High/Low 資訊
@@ -2327,7 +2511,11 @@ def plot_spc_chart_interactive(raw_df, chart_info, weekly_start_date, weekly_end
     for i in range(start_index, end_index + 1):
         data_subset = raw_df.iloc[:i+1].tail(15)
         if not data_subset.empty:
-            rules = check_rules(data_subset.copy(), chart_info)
+            rules = (
+                precomputed_rule_results.get(i, {})
+                if precomputed_rule_results is not None
+                else check_rules(data_subset.copy(), chart_info)
+            )
             violated_rule_names = []
             for rule, violated in rules.items():
                 if violated:
@@ -2512,7 +2700,8 @@ def plot_spc_chart_interactive(raw_df, chart_info, weekly_start_date, weekly_end
 
     
 
-def plot_weekly_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date, debug=False):
+def plot_weekly_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date,
+                          debug=False, precomputed_rule_results=None):
     import os
     import numpy as np
     import matplotlib.pyplot as plt
@@ -2571,7 +2760,11 @@ def plot_weekly_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date
         full_data_subset = df.iloc[:global_idx + 1].tail(15)
         if full_data_subset.empty:
             continue
-        rules = check_rules(full_data_subset.copy(), chart_info)
+        rules = (
+            precomputed_rule_results.get(int(global_idx), {})
+            if precomputed_rule_results is not None
+            else check_rules(full_data_subset.copy(), chart_info)
+        )
         if any(rules.values()):
             # 在 weekly plot 的位置畫紅點（x = pos_in_weekly）
             plt.plot(pos_in_weekly, row['point_val'], 'ro', markersize=10)
@@ -2605,7 +2798,157 @@ def plot_weekly_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date
     return image_path
 
 
-def plot_weekly_spc_chart_interactive(raw_df, chart_info, weekly_start_date, weekly_end_date, record_results=None, debug=False, use_batch_id_labels=False):
+def _get_tool_group_column(dataframe):
+    """Return the supported By Tool column, preferring Matching when both exist."""
+    for column in ('Matching', 'Tool'):
+        if column in dataframe.columns:
+            return column
+    return None
+
+
+def _plot_spc_by_tool_time_base(raw_df, chart_info, weekly_start_date, weekly_end_date, grouped=False):
+    """Create a time-ordered or tool-grouped SPC canvas colored by Tool/Matching."""
+    import matplotlib.colors as mcolors
+
+    figure = Figure(figsize=(13, 3.2))
+    axis = figure.add_subplot(111)
+    data = raw_df.copy()
+    tool_column = _get_tool_group_column(data)
+
+    if tool_column is None:
+        axis.text(0.5, 0.5, tr("by_tool_missing_column"), ha='center', va='center', transform=axis.transAxes)
+        axis.set_axis_off()
+        return FigureCanvas(figure)
+
+    data['point_time'] = pd.to_datetime(data['point_time'], errors='coerce')
+    data['point_val'] = pd.to_numeric(data['point_val'], errors='coerce')
+    data = data.dropna(subset=['point_time', 'point_val']).copy()
+    data[tool_column] = data[tool_column].fillna('Unassigned').astype(str)
+
+    if data.empty:
+        axis.text(0.5, 0.5, "No valid By Tool data", ha='center', va='center', transform=axis.transAxes)
+        axis.set_axis_off()
+        return FigureCanvas(figure)
+
+    sort_columns = [tool_column, 'point_time'] if grouped else ['point_time']
+    data = data.sort_values(sort_columns).reset_index(drop=True)
+    tools = sorted(data[tool_column].unique(), key=lambda value: str(value).casefold())
+    palette = list(mcolors.TABLEAU_COLORS.values())
+    if len(tools) > len(palette):
+        palette = [plt.get_cmap('tab20')(i / max(len(tools) - 1, 1)) for i in range(len(tools))]
+    tool_colors = {tool: palette[index % len(palette)] for index, tool in enumerate(tools)}
+
+    x_values = np.arange(len(data))
+    if not grouped:
+        axis.plot(x_values, data['point_val'], color='#94A3B8', linewidth=0.8, alpha=0.45, zorder=1)
+
+    artist_rows = {}
+    for tool_index, tool in enumerate(tools):
+        subset = data[data[tool_column] == tool]
+        line_style = '-' if grouped else 'None'
+        artist, = axis.plot(
+            subset.index,
+            subset['point_val'],
+            marker='o',
+            linestyle=line_style,
+            linewidth=0.9,
+            markersize=4,
+            alpha=0.88,
+            color=tool_colors[tool],
+            label=str(tool),
+            zorder=3,
+        )
+        artist_rows[id(artist)] = subset.reset_index(drop=True)
+        if grouped and tool_index > 0:
+            axis.axvline(subset.index.min() - 0.5, color='#CBD5E1', linestyle=':', linewidth=1)
+
+    if not grouped and weekly_start_date is not None and weekly_end_date is not None:
+        weekly_mask = (
+            (data['point_time'] >= pd.to_datetime(weekly_start_date))
+            & (data['point_time'] <= pd.to_datetime(weekly_end_date))
+        )
+        weekly_indices = data.index[weekly_mask]
+        if len(weekly_indices):
+            axis.axvspan(weekly_indices.min() - 0.5, weekly_indices.max() + 0.5,
+                         color='#FDE68A', alpha=0.22, label='Weekly range', zorder=0)
+
+    x_min, x_max = -0.8, len(data) + 1
+    draw_horizontal_limit(axis, chart_info.get('UCL'), 'UCL', x_min, x_max, fontsize=7)
+    draw_horizontal_limit(axis, chart_info.get('LCL'), 'LCL', x_min, x_max, fontsize=7)
+    if is_valid_number(chart_info.get('Target')):
+        target = float(chart_info.get('Target'))
+        axis.hlines(target, x_min, x_max, colors='#0F766E', linestyles='--', linewidth=1)
+        axis.text(x=x_max, y=target, s='Target', va='center', ha='left', fontsize=7, color='#0F766E')
+
+    tick_interval = max(1, len(data) // 24)
+    tick_indices = data.index[::tick_interval]
+    axis.set_xticks(tick_indices)
+    axis.set_xticklabels(
+        data.loc[tick_indices, 'point_time'].dt.strftime('%m/%d %H:%M'),
+        rotation=90,
+        fontsize=7,
+    )
+    axis.tick_params(axis='y', labelsize=8)
+    axis.grid(axis='y', color='#E2E8F0', linewidth=0.7, alpha=0.8)
+    axis.spines['right'].set_visible(False)
+    axis.spines['top'].set_visible(False)
+
+    group_name = chart_info.get('group_name', chart_info.get('GroupName', ''))
+    chart_name = chart_info.get('chart_name', chart_info.get('ChartName', ''))
+    title_key = 'show_by_tool_group_title' if grouped else 'show_by_tool_time_title'
+    axis.set_title(f"{group_name} / {chart_name}\n{tr(title_key)}", loc='left', fontsize=9, fontweight='bold')
+    axis.legend(
+        loc='upper left',
+        bbox_to_anchor=(1.10, 1.0),
+        fontsize=8.5,
+        frameon=False,
+        labelspacing=0.65,
+        handletextpad=0.7,
+        borderaxespad=0,
+    )
+    # Legend 與控制線標籤都保留在 Figure 內，避免被相鄰圖表裁切。
+    figure.subplots_adjust(left=0.07, right=0.72, top=0.80, bottom=0.30)
+
+    canvas = FigureCanvas(figure)
+    artists = [artist for artist in axis.lines if id(artist) in artist_rows]
+    if artists:
+        cursor = mplcursors.cursor(artists, hover=True)
+
+        @cursor.connect('add')
+        def _show_tool_point(selection):
+            rows = artist_rows.get(id(selection.artist))
+            point_index = int(round(float(selection.index)))
+            if rows is None or point_index < 0 or point_index >= len(rows):
+                return
+            point = rows.iloc[point_index]
+            selection.annotation.set_text(
+                f"{tool_column}: {point[tool_column]}\n"
+                f"Time: {point['point_time']:%Y-%m-%d %H:%M}\n"
+                f"Value: {point['point_val']:.4g}"
+            )
+        canvas._mpl_cursor = cursor
+
+    canvas._plot_args = (raw_df.copy(), chart_info.copy(), weekly_start_date, weekly_end_date)
+    canvas._plot_kind = 'spc_by_tool_group' if grouped else 'spc_by_tool_time'
+    return canvas
+
+
+def plot_spc_by_tool_time(raw_df, chart_info, weekly_start_date=None, weekly_end_date=None):
+    return _plot_spc_by_tool_time_base(
+        raw_df, chart_info, weekly_start_date, weekly_end_date, grouped=False
+    )
+
+
+def plot_spc_by_tool_time_grouping(raw_df, chart_info, weekly_start_date=None, weekly_end_date=None):
+    return _plot_spc_by_tool_time_base(
+        raw_df, chart_info, weekly_start_date, weekly_end_date, grouped=True
+    )
+
+
+def plot_weekly_spc_chart_interactive(raw_df, chart_info, weekly_start_date, weekly_end_date,
+                                      record_results=None, debug=False,
+                                      use_batch_id_labels=False,
+                                      precomputed_rule_results=None):
     """
     建立互動式 Weekly SPC 圖表，返回 FigureCanvas 而不是儲存圖片
     支援滑鼠懸停 tooltip 顯示時間、數值、WE rule 資訊
@@ -2668,7 +3011,11 @@ def plot_weekly_spc_chart_interactive(raw_df, chart_info, weekly_start_date, wee
         full_data_subset = df.iloc[:global_idx + 1].tail(15)
         if full_data_subset.empty:
             continue
-        rules = check_rules(full_data_subset.copy(), chart_info)
+        rules = (
+            precomputed_rule_results.get(int(global_idx), {})
+            if precomputed_rule_results is not None
+            else check_rules(full_data_subset.copy(), chart_info)
+        )
         violated_rule_names = []
         for rule, violated in rules.items():
             if violated:
@@ -2984,6 +3331,64 @@ class TriangleButton(QtWidgets.QPushButton):
         super().leaveEvent(event)
 
 
+class OOBAnalysisCancelled(Exception):
+    """Raised at safe checkpoints when the user cancels OOB processing."""
+
+
+class OOBProgressDialog(QtWidgets.QProgressDialog):
+    """Popup progress dialog compatible with the former QProgressBar calls."""
+
+    def __init__(self, parent=None):
+        super().__init__("", "", 0, 100, parent)
+        self.setWindowTitle(tr("oob_page_title"))
+        self.setCancelButtonText(tr("cancel_processing"))
+        self.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
+        self.setMinimumDuration(0)
+        self.setAutoClose(False)
+        self.setAutoReset(False)
+        self.setMinimumWidth(520)
+        self.setMinimumHeight(150)
+        self.setStyleSheet("""
+            QProgressDialog {
+                background-color: white;
+                color: #0F172A;
+            }
+            QLabel {
+                color: #334155;
+                font-size: 13px;
+                font-weight: 600;
+                padding: 8px 4px;
+            }
+            QProgressBar {
+                min-height: 24px;
+                border: none;
+                border-radius: 12px;
+                background-color: #E2E8F0;
+                color: white;
+                text-align: center;
+                font-weight: 700;
+            }
+            QProgressBar::chunk {
+                border-radius: 12px;
+                background-color: #4F46E5;
+            }
+            QPushButton {
+                background-color: white;
+                color: #475569;
+                border: 1px solid #CBD5E1;
+                border-radius: 8px;
+                padding: 7px 16px;
+                font-weight: 650;
+            }
+            QPushButton:hover { background-color: #F1F5F9; }
+        """)
+
+    def setFormat(self, text):
+        self.setLabelText(str(text))
+        progress_widget = self.findChild(QtWidgets.QProgressBar)
+        if progress_widget is not None:
+            progress_widget.setFormat("%p%")
+
 class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
     def __init__(self):
         super().__init__()
@@ -3024,6 +3429,8 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         self.central_widget = QtWidgets.QWidget()
         self.setCentralWidget(self.central_widget)
         self.main_horizontal_layout = QtWidgets.QHBoxLayout(self.central_widget) # 主要的水平佈局
+        self.main_horizontal_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_horizontal_layout.setSpacing(0)
 
         self.init_ui()
     
@@ -3162,7 +3569,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
             }
 
             QWidget {
-                font-family: 'Segoe UI', 'Microsoft JhengHei', sans-serif;
+                font-family: 'Segoe UI', 'Microsoft JhengHei', 'Yu Gothic UI', 'Malgun Gothic', 'Meiryo UI', sans-serif;
                 background-color: #f4f6f9;
                 color: #000957;
             }
@@ -3282,12 +3689,12 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
 
         # --- 左側選單區域 ---
         self.left_menu_widget = QtWidgets.QWidget()
-        self.left_menu_widget.setFixedWidth(180) # 設定選單寬度
-        self.left_menu_widget.setStyleSheet("background-color: #344CB7;") # 選單背景色
+        self.left_menu_widget.setFixedWidth(224) # 現代側欄保留較舒適的文字空間
+        self.left_menu_widget.setStyleSheet("background-color: #111827;")
         self.left_menu_layout = QtWidgets.QVBoxLayout(self.left_menu_widget)
         self.left_menu_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop) # 按鈕靠頂部對齊
-        self.left_menu_layout.setContentsMargins(10, 20, 10, 10)
-        self.left_menu_layout.setSpacing(15) # 選單項目間距
+        self.left_menu_layout.setContentsMargins(14, 20, 14, 14)
+        self.left_menu_layout.setSpacing(7)
 
         # 語言切換按鈕（在最上方）
         self.lang_button = QtWidgets.QPushButton("中 / EN")
@@ -3395,22 +3802,65 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
 
         # --- 建立第一個分頁 (圖表處理與顯示) ---
         self.processing_tab_widget = QtWidgets.QWidget()
+        self.processing_tab_widget.setObjectName("OOBProcessingPage")
         processing_layout = QtWidgets.QVBoxLayout(self.processing_tab_widget)
-        processing_layout.setSpacing(15)
-        processing_layout.setContentsMargins(20, 20, 20, 20)
+        processing_layout.setSpacing(18)
+        processing_layout.setContentsMargins(28, 24, 28, 28)
+
+        page_header = QtWidgets.QWidget()
+        page_header.setObjectName("TransparentWidget")
+        page_header_layout = QtWidgets.QVBoxLayout(page_header)
+        page_header_layout.setContentsMargins(0, 0, 0, 0)
+        page_header_layout.setSpacing(4)
+        self.oob_page_title_label = QtWidgets.QLabel(tr("oob_page_title"))
+        self.oob_page_title_label.setObjectName("OOBPageTitle")
+        self.oob_page_subtitle_label = QtWidgets.QLabel(tr("oob_page_subtitle"))
+        self.oob_page_subtitle_label.setObjectName("OOBPageSubtitle")
+        self.oob_page_subtitle_label.setWordWrap(True)
+        page_header_layout.addWidget(self.oob_page_title_label)
+        page_header_layout.addWidget(self.oob_page_subtitle_label)
+        processing_layout.addWidget(page_header)
 
         # 儲存設定（預設值）
         self.oob_settings = {
             'show_charts_gui': True,
             'use_interactive_charts': True,
+            'show_by_tool_charts': False,
+            'enable_record_high_low': False,
             'custom_time_range_enabled': False,
             'start_time': QtCore.QDateTime.currentDateTime().addDays(-30),
             'end_time': QtCore.QDateTime.currentDateTime()
         }
         
         # 按鈕區域 - 水平佈局
-        button_layout = QHBoxLayout()
+        toolbar = QtWidgets.QFrame()
+        toolbar.setObjectName("OOBToolbar")
+        button_layout = QHBoxLayout(toolbar)
+        button_layout.setContentsMargins(18, 14, 18, 14)
         button_layout.setSpacing(10)
+
+        ready_widget = QtWidgets.QWidget()
+        ready_widget.setObjectName("TransparentWidget")
+        ready_widget.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
+        ready_layout = QtWidgets.QVBoxLayout(ready_widget)
+        ready_layout.setContentsMargins(0, 0, 0, 0)
+        ready_layout.setSpacing(2)
+        self.oob_ready_title_label = QtWidgets.QLabel(tr("oob_ready_title"))
+        self.oob_ready_title_label.setObjectName("OOBReadyTitle")
+        self.oob_ready_desc_label = QtWidgets.QLabel(tr("oob_ready_desc"))
+        self.oob_ready_desc_label.setObjectName("OOBReadyDescription")
+        self.oob_ready_desc_label.setWordWrap(True)
+        self.oob_ready_desc_label.setMinimumWidth(0)
+        self.oob_ready_desc_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
+        ready_layout.addWidget(self.oob_ready_title_label)
+        ready_layout.addWidget(self.oob_ready_desc_label)
+        button_layout.addWidget(ready_widget, 1)
         
         # 設定按鈕
         self.settings_button = QtWidgets.QPushButton(f"⚙️ {tr('settings')}")
@@ -3419,40 +3869,44 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         self.settings_button.setFont(get_app_font(11))
         self.settings_button.setStyleSheet("""
             QPushButton {
-                background-color: #f8f9fa;
-                color: #333;
-                border: 2px solid #dee2e6;
-                border-radius: 8px;
-                padding: 8px 15px;
-                font-weight: bold;
+                background-color: white;
+                color: #334155;
+                border: 1px solid #CBD5E1;
+                border-radius: 10px;
+                padding: 9px 16px;
+                font-weight: 650;
             }
             QPushButton:hover {
-                background-color: #e9ecef;
-                border-color: #adb5bd;
+                background-color: #F8FAFC;
+                border-color: #94A3B8;
             }
             QPushButton:pressed {
-                background-color: #dee2e6;
+                background-color: #F1F5F9;
             }
         """)
         self.settings_button.clicked.connect(self.open_oob_settings)
-        button_layout.addWidget(self.settings_button)
+        button_layout.addWidget(
+            self.settings_button,
+            0,
+            QtCore.Qt.AlignmentFlag.AlignVCenter,
+        )
         
         # 啟動按鈕
         self.start_button = QtWidgets.QPushButton(f"▶ {tr('start_process')}")
         self.start_button.setStyleSheet("""
             QPushButton {
-                background-color: #344CB7;
+                background-color: #4F46E5;
                 color: white;
                 border: none;
-                border-radius: 8px;
+                border-radius: 10px;
                 padding: 10px 20px;
-                font-weight: bold;
+                font-weight: 700;
             }
             QPushButton:hover {
-                background-color: #577BC1;
+                background-color: #4338CA;
             }
             QPushButton:pressed {
-                background-color: #000957;
+                background-color: #3730A3;
             }
             QPushButton:disabled {
                 background-color: #cccccc;
@@ -3460,28 +3914,32 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
             }
         """)
         self.start_button.clicked.connect(self.process_charts)
-        button_layout.addWidget(self.start_button)
+        button_layout.addWidget(
+            self.start_button,
+            0,
+            QtCore.Qt.AlignmentFlag.AlignVCenter,
+        )
         
-        # 進度條 - 與按鈕水平對齊
-        self.progress_bar = ModernProgressBar()
-        self.progress_bar.setMinimumHeight(35)
-        self.progress_bar.setFixedWidth(600)
-        self.progress_bar.hide()  # 初始隱藏，啟動時再顯示
-        button_layout.addWidget(self.progress_bar)
+        # 按下開始處理後才建立，避免開啟設定視窗時被 QProgressDialog 自動叫出。
+        self.progress_bar = None
         
-        button_layout.addStretch()
-        processing_layout.addLayout(button_layout)
+        processing_layout.addWidget(toolbar)
         
         # 圖表顯示區域
         self.image_container = QtWidgets.QScrollArea(self)
+        self.image_container.setObjectName("OOBResultsArea")
         self.image_container.setWidgetResizable(True)
         self.image_container.setMinimumHeight(400)
         processing_layout.addWidget(self.image_container, 1)
 
         self.image_grid_widget = QtWidgets.QWidget()
+        self.image_grid_widget.setObjectName("TransparentWidget")
         self.image_grid_layout = QtWidgets.QGridLayout(self.image_grid_widget)
+        self.image_grid_layout.setContentsMargins(18, 18, 18, 18)
         self.image_grid_layout.setSpacing(20)
         self.image_container.setWidget(self.image_grid_widget)
+        self.oob_empty_state_widget = None
+        self._show_oob_empty_state()
         
         # 將 Chart Processing Tab 添加到 oob_system_tabs
         self.oob_system_tabs.addTab(self.processing_tab_widget, tr("chart_processing"))
@@ -3519,6 +3977,8 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         self.menu_button_group.setExclusive(True)
         self.home_button.setChecked(True)
         self.menu_button_group.addButton(self.data_check_button)
+
+        self._apply_home_oob_styles()
         
         # 預設隱藏摺疊按鈕（因為首頁不需要）
         self.toggle_menu_button.hide()
@@ -3650,25 +4110,24 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         layout.setContentsMargins(22, 22, 22, 20)
         layout.setSpacing(14)
 
-        is_zh = get_translator().current_lang == "ZH_TW"
         header = QtWidgets.QFrame()
         header.setObjectName("customerHeader")
         header_layout = QtWidgets.QVBoxLayout(header)
         header_layout.setContentsMargins(20, 17, 20, 17)
         header_layout.setSpacing(4)
-        title = QtWidgets.QLabel("篩選客戶" if is_zh else "Filter customers")
+        title = QtWidgets.QLabel(tr("customer_filter", "Customer Filter"))
         title.setObjectName("customerTitle")
-        subtitle = QtWidgets.QLabel(
-            "選擇要套用至所有分析的客戶" if is_zh
-            else "Choose the customers to include across all analyses"
-        )
+        subtitle = QtWidgets.QLabel(tr(
+            "customer_filter_subtitle",
+            "Choose the customers to include across all analyses",
+        ))
         subtitle.setObjectName("customerSubtitle")
         header_layout.addWidget(title)
         header_layout.addWidget(subtitle)
         layout.addWidget(header)
 
         summary_row = QtWidgets.QHBoxLayout()
-        section_label = QtWidgets.QLabel("客戶清單" if is_zh else "CUSTOMER LIST")
+        section_label = QtWidgets.QLabel(tr("customer_list", "Customer list"))
         section_label.setStyleSheet("color: #64748b; font-size: 11px; font-weight: 700;")
         count_label = QtWidgets.QLabel()
         count_label.setObjectName("selectionCount")
@@ -3709,8 +4168,8 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                 item.setHidden(not matches)
                 visible += int(matches)
             section_label.setText(
-                (f"客戶清單 · {visible} 筆" if is_zh else f"CUSTOMER LIST · {visible} RESULTS")
-                if query else ("客戶清單" if is_zh else "CUSTOMER LIST")
+                tr("customer_list_results").format(count=visible)
+                if query else tr("customer_list")
             )
 
         search.textChanged.connect(filter_items)
@@ -3739,7 +4198,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
             selected = len(checked_names())
             total = customer_list.count()
             count_label.setText(
-                f"已選 {selected} / {total}" if is_zh else f"{selected} of {total} selected"
+                tr("customer_selection_count").format(selected=selected, total=total)
             )
             apply_button.setEnabled(selected > 0 or total == 0)
 
@@ -3761,7 +4220,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         customer_list.itemChanged.connect(update_count)
         buttons = QtWidgets.QDialogButtonBox()
         apply_button = buttons.addButton(
-            "套用篩選" if is_zh else "Apply filter",
+            tr("apply_filter", "Apply filter"),
             QtWidgets.QDialogButtonBox.ButtonRole.AcceptRole)
         cancel_button = buttons.addButton(
             tr("cancel", "Cancel"), QtWidgets.QDialogButtonBox.ButtonRole.RejectRole)
@@ -3783,12 +4242,210 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         button = QtWidgets.QPushButton(text)
         button.setCheckable(True) # Make button checkable for selection feedback
         button.setFont(get_app_font(14, QtGui.QFont.Weight.Bold))
-        button.setStyleSheet("QPushButton.menu_button { background-color: #344CB7; color: white; border-radius: 8px; padding: 10px 15px; font-size: 14px; text-align: left; border: none; font-weight: bold; }"
-                             "QPushButton.menu_button:hover { background-color: #577BC1; }"
-                             "QPushButton.menu_button:checked { background-color: #000957; border-left: 5px solid #FFEB00; padding-left: 10px; }")
+        button.setMinimumHeight(44)
+        button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        button.setStyleSheet(
+            "QPushButton.menu_button { background-color: transparent; color: #CBD5E1; "
+            "border-radius: 10px; padding: 11px 14px; font-size: 14px; text-align: left; "
+            "border: none; font-weight: 600; }"
+            "QPushButton.menu_button:hover { background-color: #1F2937; color: white; }"
+            "QPushButton.menu_button:checked { background-color: #312E81; color: white; "
+            "border-left: 3px solid #818CF8; padding-left: 11px; }"
+        )
         # Apply the class for styling
         button.setProperty("class", "menu_button")
         return button
+
+    def _apply_home_oob_styles(self):
+        """首頁與 OOB 示範頁的現代化樣式；不改動其他分析頁結構。"""
+        self.setStyleSheet(self.styleSheet() + """
+            QWidget#HomePage,
+            QWidget#OOBProcessingPage,
+            QWidget#SummaryTabWidget {
+                background-color: #F6F8FC;
+            }
+            QWidget#TransparentWidget { background: transparent; }
+
+            QFrame#HomeHero {
+                background-color: #111827;
+                border: none;
+                border-radius: 24px;
+            }
+            QLabel#PageEyebrow {
+                background: transparent;
+                color: #A5B4FC;
+                font-size: 11px;
+                font-weight: 800;
+            }
+            QLabel#HomeTitle {
+                background: transparent;
+                color: white;
+                font-size: 30px;
+                font-weight: 750;
+            }
+            QLabel#HomeSubtitle {
+                background: transparent;
+                color: #CBD5E1;
+                font-size: 14px;
+                font-weight: 400;
+            }
+            QLabel#SectionTitle, QLabel#OOBPageTitle {
+                background: transparent;
+                color: #0F172A;
+                font-size: 22px;
+                font-weight: 750;
+            }
+            QLabel#SectionSubtitle, QLabel#OOBPageSubtitle {
+                background: transparent;
+                color: #64748B;
+                font-size: 13px;
+                font-weight: 400;
+            }
+            QFrame#HomeActionCard, QFrame#SummaryMetricCard {
+                background-color: white;
+                border: 1px solid #E2E8F0;
+                border-radius: 18px;
+            }
+            QFrame#HomeActionCard:hover {
+                border: 1px solid #A5B4FC;
+                background-color: #FCFCFF;
+            }
+            QLabel#HomeActionTitle {
+                background: transparent;
+                color: #0F172A;
+                font-size: 16px;
+                font-weight: 700;
+            }
+            QLabel#HomeActionDescription {
+                background: transparent;
+                color: #64748B;
+                font-size: 12px;
+                font-weight: 400;
+            }
+            QPushButton#HomeActionButton {
+                background: transparent;
+                color: #4F46E5;
+                border: none;
+                padding: 4px 0;
+                font-size: 12px;
+                font-weight: 700;
+                text-align: left;
+            }
+            QPushButton#HomeActionButton:hover { color: #3730A3; }
+
+            QTabWidget#OOBSystemTabs::pane {
+                border: none;
+                background-color: #F6F8FC;
+                top: -1px;
+            }
+            QTabWidget#OOBSystemTabs QTabBar::tab {
+                background-color: transparent;
+                color: #64748B;
+                border: none;
+                border-bottom: 3px solid transparent;
+                padding: 13px 22px;
+                margin: 0;
+                font-size: 13px;
+                font-weight: 650;
+            }
+            QTabWidget#OOBSystemTabs QTabBar::tab:hover {
+                color: #312E81;
+                background-color: #EEF2FF;
+            }
+            QTabWidget#OOBSystemTabs QTabBar::tab:selected {
+                color: #3730A3;
+                background-color: white;
+                border-bottom: 3px solid #4F46E5;
+            }
+            QFrame#OOBToolbar {
+                background-color: white;
+                border: 1px solid #E2E8F0;
+                border-radius: 16px;
+            }
+            QLabel#OOBReadyTitle {
+                background: transparent;
+                color: #0F172A;
+                font-size: 14px;
+                font-weight: 700;
+            }
+            QLabel#OOBReadyDescription {
+                background: transparent;
+                color: #64748B;
+                font-size: 12px;
+                font-weight: 400;
+            }
+            QScrollArea#OOBResultsArea {
+                background-color: white;
+                border: 1px solid #E2E8F0;
+                border-radius: 16px;
+            }
+            QFrame#OOBResultCard {
+                background-color: white;
+                border: 1px solid #E2E8F0;
+                border-radius: 14px;
+            }
+            QFrame#OOBEmptyState {
+                background-color: white;
+                border: 1px dashed #CBD5E1;
+                border-radius: 16px;
+            }
+            QLabel#OOBEmptyBadge {
+                background-color: #EEF2FF;
+                color: #4F46E5;
+                border-radius: 18px;
+                font-size: 13px;
+                font-weight: 800;
+            }
+            QLabel#OOBEmptyTitle {
+                background: transparent;
+                color: #0F172A;
+                font-size: 18px;
+                font-weight: 750;
+            }
+            QLabel#OOBEmptyDescription {
+                background: transparent;
+                color: #64748B;
+                font-size: 13px;
+                font-weight: 400;
+            }
+            QLabel#SummaryMetricValue {
+                background: transparent;
+                color: #0F172A;
+                font-size: 14px;
+                font-weight: 700;
+            }
+            QFrame#SummaryChartCard {
+                background-color: #FFFFFF;
+                border: 1px solid #E2E8F0;
+                border-radius: 16px;
+            }
+            QLabel#SummarySectionTitle {
+                background: transparent;
+                color: #0F172A;
+                font-size: 13px;
+                font-weight: 750;
+                padding-top: 4px;
+            }
+            QTableWidget#OOBViolationTable {
+                background-color: white;
+                alternate-background-color: #F8FAFC;
+                border: 1px solid #E2E8F0;
+                border-radius: 12px;
+                gridline-color: #E2E8F0;
+                selection-background-color: #EEF2FF;
+                selection-color: #1E1B4B;
+                font-size: 12px;
+            }
+            QTableWidget#OOBViolationTable QHeaderView::section {
+                background-color: #F8FAFC;
+                color: #475569;
+                border: none;
+                border-bottom: 1px solid #E2E8F0;
+                padding: 9px;
+                font-size: 12px;
+                font-weight: 700;
+            }
+        """)
 
     def toggle_left_menu(self):
         """摺疊/展開左側選單"""
@@ -3824,6 +4481,23 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         self.tool_matching_button.setText(tr("tool_matching"))
         self.cl_tighten_button.setText(tr("cl_tighten"))
         self._update_customer_filter_button()
+
+        if hasattr(self, 'home_text_bindings'):
+            for widget, key, template in self.home_text_bindings:
+                widget.setText(template.format(tr(key)))
+        if hasattr(self, 'home_tooltip_bindings'):
+            for widget, title_key, description_key in self.home_tooltip_bindings:
+                widget.setAccessibleName(tr(title_key))
+                widget.setToolTip(tr(description_key))
+
+        if hasattr(self, 'oob_page_title_label'):
+            self.oob_page_title_label.setText(tr("oob_page_title"))
+            self.oob_page_subtitle_label.setText(tr("oob_page_subtitle"))
+            self.oob_ready_title_label.setText(tr("oob_ready_title"))
+            self.oob_ready_desc_label.setText(tr("oob_ready_desc"))
+        if getattr(self, 'oob_empty_state_widget', None) is not None:
+            self.oob_empty_title_label.setText(tr("oob_empty_title"))
+            self.oob_empty_desc_label.setText(tr("oob_empty_desc"))
         
         # 更新按鈕文字
         if hasattr(self, 'settings_button'):
@@ -3840,6 +4514,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         # 更新 Summary Dashboard 標籤
         if hasattr(self, 'summary_title_label'):
             self.summary_title_label.setText(f"<b>{tr('summary_dashboard')}</b>")
+            self.summary_subtitle_label.setText(tr("summary_overview_subtitle"))
             self.violation_table_label.setText(f"<b>{tr('charts_with_anomalies_details')}</b>")
             # 更新表頭
             headers = [tr('group_name'), tr('chart_name'), tr('ooc_count'), tr('we_rules'), tr('oob_rules')]
@@ -3914,6 +4589,22 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                 else:
                     self.oob_charts_label_summary.setText(f"{tr('charts_with_oob')} N/A")
             
+            metric_translations = [
+                (self.total_charts_label_summary, 'total_charts'),
+                (self.processed_charts_label_summary, 'processed_successfully'),
+                (self.skipped_charts_label_summary, 'no_data_charts'),
+                (self.ooc_charts_label_summary, 'charts_with_ooc'),
+                (self.we_count_charts_label_summary, 'charts_with_we_rule'),
+                (self.oob_charts_label_summary, 'charts_with_oob'),
+            ]
+            for metric_label, translation_key in metric_translations:
+                value = metric_label.property("summaryValue")
+                self._set_summary_metric(
+                    metric_label,
+                    tr(translation_key),
+                    None if value in (None, "N/A") else value,
+                )
+
             # 重新繪製圖表以使用新語言
             self.refresh_summary_charts()
         
@@ -3932,13 +4623,137 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
 
     # --- 新增首頁和拆分資料頁面的佔位符方法 ---
     def _create_home_page(self):
-            widget = QtWidgets.QWidget()
-            layout = QtWidgets.QVBoxLayout(widget)
-            # Update the label content for "Welcome to Supplier SPC!"
-            label = QtWidgets.QLabel("<h1>Welcome to Supplier SPC!</h1><p>Please select an option from the left menu.</p>")
-            label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(label)
-            return widget
+        widget = QtWidgets.QWidget()
+        widget.setObjectName("HomePage")
+        self.home_text_bindings = []
+        self.home_tooltip_bindings = []
+
+        page_layout = QtWidgets.QVBoxLayout(widget)
+        page_layout.setContentsMargins(32, 24, 32, 24)
+        page_layout.setSpacing(16)
+
+        hero = QtWidgets.QFrame()
+        hero.setObjectName("HomeHero")
+        hero.setMinimumHeight(138)
+        hero.setMaximumHeight(154)
+        hero_layout = QtWidgets.QVBoxLayout(hero)
+        hero_layout.setContentsMargins(34, 20, 34, 20)
+        hero_layout.setSpacing(6)
+
+        self.home_eyebrow_label = QtWidgets.QLabel(tr("home_eyebrow"))
+        self.home_eyebrow_label.setObjectName("PageEyebrow")
+        self.home_title_label = QtWidgets.QLabel(tr("home_welcome"))
+        self.home_title_label.setObjectName("HomeTitle")
+        self.home_subtitle_label = QtWidgets.QLabel(tr("home_subtitle"))
+        self.home_subtitle_label.setObjectName("HomeSubtitle")
+        self.home_subtitle_label.setWordWrap(True)
+        self.home_subtitle_label.setMaximumWidth(760)
+        hero_layout.addWidget(self.home_eyebrow_label)
+        hero_layout.addWidget(self.home_title_label)
+        hero_layout.addWidget(self.home_subtitle_label)
+        page_layout.addWidget(hero)
+
+        section_header = QtWidgets.QWidget()
+        section_header.setObjectName("TransparentWidget")
+        section_header_layout = QtWidgets.QVBoxLayout(section_header)
+        section_header_layout.setContentsMargins(2, 0, 0, 0)
+        section_header_layout.setSpacing(3)
+        self.home_actions_title_label = QtWidgets.QLabel(tr("home_quick_actions"))
+        self.home_actions_title_label.setObjectName("SectionTitle")
+        self.home_actions_subtitle_label = QtWidgets.QLabel(tr("home_quick_actions_subtitle"))
+        self.home_actions_subtitle_label.setObjectName("SectionSubtitle")
+        section_header_layout.addWidget(self.home_actions_title_label)
+        section_header_layout.addWidget(self.home_actions_subtitle_label)
+        page_layout.addWidget(section_header)
+
+        self.home_text_bindings.extend([
+            (self.home_eyebrow_label, "home_eyebrow", "{}"),
+            (self.home_title_label, "home_welcome", "{}"),
+            (self.home_subtitle_label, "home_subtitle", "{}"),
+            (self.home_actions_title_label, "home_quick_actions", "{}"),
+            (self.home_actions_subtitle_label, "home_quick_actions_subtitle", "{}"),
+        ])
+
+        action_grid = QtWidgets.QGridLayout()
+        action_grid.setHorizontalSpacing(18)
+        action_grid.setVerticalSpacing(14)
+        action_grid.setColumnStretch(0, 1)
+        action_grid.setColumnStretch(1, 1)
+        cards = [
+            ("DQ", "home_health_title", "home_health_desc", self.data_check_button, "#0891B2"),
+            ("DS", "home_split_title", "home_split_desc", self.split_data_button, "#D97706"),
+            ("OOB", "home_oob_title", "home_oob_desc", self.oob_system_button, "#4F46E5"),
+            ("CPK", "home_cpk_title", "home_cpk_desc", self.cpk_calculation_button, "#059669"),
+            ("TM", "home_matching_title", "home_matching_desc", self.tool_matching_button, "#7C3AED"),
+            ("CL", "home_cl_title", "home_cl_desc", self.cl_tighten_button, "#DC2626"),
+        ]
+        for index, card_config in enumerate(cards):
+            action_grid.addWidget(
+                self._create_home_action_card(*card_config), index // 2, index % 2
+            )
+        page_layout.addLayout(action_grid)
+        page_layout.addStretch(1)
+
+        scroll_area = QtWidgets.QScrollArea()
+        scroll_area.setObjectName("HomeScrollArea")
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        scroll_area.setStyleSheet(
+            "QScrollArea#HomeScrollArea { background: #F6F8FC; border: none; }"
+            "QScrollArea#HomeScrollArea > QWidget > QWidget { background: #F6F8FC; }"
+        )
+        scroll_area.setWidget(widget)
+        return scroll_area
+
+    def _create_home_action_card(self, badge, title_key, description_key, target_button, accent):
+        card = QtWidgets.QFrame()
+        card.setObjectName("HomeActionCard")
+        card.setMinimumHeight(126)
+        card.setMaximumHeight(140)
+        card_layout = QtWidgets.QHBoxLayout(card)
+        card_layout.setContentsMargins(20, 14, 18, 14)
+        card_layout.setSpacing(14)
+
+        badge_label = QtWidgets.QLabel(badge)
+        badge_label.setObjectName("HomeActionBadge")
+        badge_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        badge_label.setFixedSize(46, 46)
+        badge_label.setStyleSheet(
+            f"background-color: {accent}; color: white; border-radius: 14px; "
+            "font-size: 12px; font-weight: 800;"
+        )
+        card_layout.addWidget(badge_label, alignment=QtCore.Qt.AlignmentFlag.AlignTop)
+
+        content_layout = QtWidgets.QVBoxLayout()
+        content_layout.setSpacing(5)
+        title_label = QtWidgets.QLabel(tr(title_key))
+        title_label.setObjectName("HomeActionTitle")
+        description_label = QtWidgets.QLabel(tr(description_key))
+        description_label.setObjectName("HomeActionDescription")
+        description_label.setWordWrap(True)
+        open_button = QtWidgets.QPushButton(f"{tr('home_open')}  →")
+        open_button.setObjectName("HomeActionButton")
+        open_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        open_button.setToolTip(tr(description_key))
+        open_button.setAccessibleName(tr(title_key))
+        open_button.clicked.connect(target_button.click)
+        card.setFocusProxy(open_button)
+        content_layout.addWidget(title_label)
+        content_layout.addWidget(description_label)
+        content_layout.addStretch(1)
+        content_layout.addWidget(open_button, alignment=QtCore.Qt.AlignmentFlag.AlignLeft)
+        card_layout.addLayout(content_layout, 1)
+
+        self.home_text_bindings.extend([
+            (title_label, title_key, "{}"),
+            (description_label, description_key, "{}"),
+            (open_button, "home_open", "{}  →"),
+        ])
+        self.home_tooltip_bindings.append((open_button, title_key, description_key))
+        return card
     def _create_split_data_page(self):
         """
         這個方法現在會創建並返回你的 SplitDataWidget 實例。
@@ -3966,8 +4781,12 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         # === Summary Dashboard UI 元素 ===
         self.summary_title_label = QtWidgets.QLabel(f"<b>{tr('summary_dashboard')}</b>")
         self.summary_title_label.setFont(get_app_font(16, QtGui.QFont.Weight.Bold))
-        self.summary_title_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.summary_title_label.setObjectName("OOBPageTitle")
+        self.summary_title_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
         summary_layout.addWidget(self.summary_title_label)
+        self.summary_subtitle_label = QtWidgets.QLabel(tr("summary_overview_subtitle"))
+        self.summary_subtitle_label.setObjectName("OOBPageSubtitle")
+        summary_layout.addWidget(self.summary_subtitle_label)
 
         # 統計數字 Label 的網格佈局
         summary_stats_layout = QtWidgets.QGridLayout()
@@ -3981,13 +4800,31 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         self.we_count_charts_label_summary = QtWidgets.QLabel(f"{tr('charts_with_we_rule')} N/A")
         self.oob_charts_label_summary = QtWidgets.QLabel(f"{tr('charts_with_oob')} N/A")
 
-        summary_stats_layout.addWidget(self.total_charts_label_summary, 0, 0)
-        summary_stats_layout.addWidget(self.processed_charts_label_summary, 0, 1)
-        summary_stats_layout.addWidget(self.skipped_charts_label_summary, 0, 2)
+        initial_metrics = [
+            (self.total_charts_label_summary, tr('total_charts')),
+            (self.processed_charts_label_summary, tr('processed_successfully')),
+            (self.skipped_charts_label_summary, tr('no_data_charts')),
+            (self.ooc_charts_label_summary, tr('charts_with_ooc')),
+            (self.we_count_charts_label_summary, tr('charts_with_we_rule')),
+            (self.oob_charts_label_summary, tr('charts_with_oob')),
+        ]
+        for metric_label, metric_title in initial_metrics:
+            self._set_summary_metric(metric_label, metric_title, None)
 
-        summary_stats_layout.addWidget(self.ooc_charts_label_summary, 1, 0)
-        summary_stats_layout.addWidget(self.we_count_charts_label_summary, 1, 1)
-        summary_stats_layout.addWidget(self.oob_charts_label_summary, 1, 2)
+        metric_items = [
+            (self.total_charts_label_summary, "#4F46E5"),
+            (self.processed_charts_label_summary, "#059669"),
+            (self.skipped_charts_label_summary, "#64748B"),
+            (self.ooc_charts_label_summary, "#DC2626"),
+            (self.we_count_charts_label_summary, "#D97706"),
+            (self.oob_charts_label_summary, "#7C3AED"),
+        ]
+        for index, (metric_label, accent) in enumerate(metric_items):
+            summary_stats_layout.addWidget(
+                self._create_summary_metric_card(metric_label, accent),
+                index // 3,
+                index % 3,
+            )
 
         summary_stats_layout.setSpacing(15)
 
@@ -3996,16 +4833,20 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         # --- 圖表顯示區域 ---
         self.charts_main_layout = QtWidgets.QVBoxLayout()
         self.charts_horizontal_layout = QtWidgets.QHBoxLayout()
+        self.charts_horizontal_layout.setSpacing(16)
         self.charts_main_layout.addLayout(self.charts_horizontal_layout)
         summary_layout.addLayout(self.charts_main_layout)
 
         # --- 違規圖表詳細列表區域 (保持不變) ---
         self.violation_table_label = QtWidgets.QLabel(f"<b>{tr('charts_with_anomalies_details')}</b>")
+        self.violation_table_label.setObjectName("SummarySectionTitle")
         self.violation_table_label.setFont(get_app_font(12, QtGui.QFont.Weight.Bold))
         self.violation_table_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
         summary_layout.addWidget(self.violation_table_label)
 
         self.violation_table = QtWidgets.QTableWidget()
+        self.violation_table.setObjectName("OOBViolationTable")
+        self.violation_table.setAlternatingRowColors(True)
         self.violation_table.setColumnCount(5)
         headers = [tr('group_name'), tr('chart_name'), tr('ooc_count'), tr('we_rules'), tr('oob_rules')]
         self.violation_table.setHorizontalHeaderLabels(headers)
@@ -4017,107 +4858,179 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         self.violation_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         self.violation_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         self.violation_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
+        self.violation_table.setMinimumHeight(150)
         summary_layout.addWidget(self.violation_table)
 
         summary_layout.addStretch()
 
-        summary_layout.setContentsMargins(20, 20, 20, 20)
-        summary_layout.setSpacing(20)
+        summary_layout.setContentsMargins(28, 24, 28, 28)
+        summary_layout.setSpacing(14)
         
         # 注意: setup_summary_dashboard_tab 不再呼叫 self.addTab，
         # 因為它會被 oob_system_tabs 呼叫
     # --- 繪製圖表的輔助方法 ---
 
+    def _set_summary_metric(self, label, title, value):
+        """Render a compact metric title with a prominent value."""
+        clean_title = str(title).rstrip("：:").strip()
+        display_value = "N/A" if value is None else str(value)
+        label.setProperty("summaryValue", display_value)
+        label.setText(
+            f"<span style='font-size:12px; color:#64748B; font-weight:600;'>"
+            f"{clean_title}</span><br>"
+            f"<span style='font-size:24px; color:#0F172A; font-weight:750;'>"
+            f"{display_value}</span>"
+        )
+
+    def _create_summary_metric_card(self, metric_label, accent):
+        card = QtWidgets.QFrame()
+        card.setObjectName("SummaryMetricCard")
+        card.setMinimumHeight(76)
+        card_layout = QtWidgets.QHBoxLayout(card)
+        card_layout.setContentsMargins(14, 12, 16, 12)
+        card_layout.setSpacing(12)
+
+        accent_bar = QtWidgets.QFrame()
+        accent_bar.setFixedWidth(4)
+        accent_bar.setStyleSheet(f"background-color: {accent}; border-radius: 2px;")
+        metric_label.setObjectName("SummaryMetricValue")
+        metric_label.setWordWrap(True)
+        card_layout.addWidget(accent_bar)
+        card_layout.addWidget(metric_label, 1)
+        shadow = QtWidgets.QGraphicsDropShadowEffect(card)
+        shadow.setBlurRadius(16)
+        shadow.setOffset(0, 3)
+        shadow.setColor(QtGui.QColor(15, 23, 42, 20))
+        card.setGraphicsEffect(shadow)
+        return card
+
+    def _add_summary_chart(self, canvas):
+        """Place a summary chart in a consistent responsive card."""
+        card = QtWidgets.QFrame()
+        card.setObjectName("SummaryChartCard")
+        card.setMinimumHeight(285)
+        card.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
+        layout = QtWidgets.QVBoxLayout(card)
+        layout.setContentsMargins(10, 10, 10, 8)
+        canvas.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+        layout.addWidget(canvas)
+        shadow = QtWidgets.QGraphicsDropShadowEffect(card)
+        shadow.setBlurRadius(18)
+        shadow.setOffset(0, 4)
+        shadow.setColor(QtGui.QColor(15, 23, 42, 22))
+        card.setGraphicsEffect(shadow)
+        self.charts_horizontal_layout.addWidget(card, 1)
+        return card
+
     def create_status_pie_chart(self, processed, skipped):
         from translations import tr
-        
-        fig = Figure(figsize=(4, 4))
+        fig = Figure(figsize=(4.2, 3.2), facecolor="#FFFFFF")
         ax = fig.add_subplot(111)
-
         labels = [tr('processed'), tr('no_data')]
         sizes = [processed, skipped]
-        colors = ['#577BC1', '#cccccc'] # Blue and Grey
+        if sum(sizes) <= 0:
+            sizes = [0, 1]
 
-        # 甜甜圈圖設定
-        wedgeprops = {'width': 0.3, 'edgecolor': 'white'} # 設定甜甜圈厚度
-
-        ax.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%',
-               shadow=False, startangle=140, wedgeprops=wedgeprops, 
-               pctdistance=0.85, labeldistance=1.1,
-               textprops={'fontsize': 10})
+        wedges, _ = ax.pie(
+            sizes,
+            colors=['#4F46E5', '#CBD5E1'],
+            startangle=90,
+            counterclock=False,
+            wedgeprops={'width': 0.24, 'edgecolor': '#FFFFFF', 'linewidth': 3},
+        )
         ax.axis('equal')
-        ax.set_title(tr('overall_processing_status'), fontsize=12, pad=15)
-
-        # 確保圖表邊界有足夠空間
-        fig.subplots_adjust(left=0.1, right=0.9, top=0.85, bottom=0.15)
-
-        fig.patch.set_alpha(0)
-
-        canvas = FigureCanvas(fig)
-        return canvas
+        ax.text(0, 0.08, str(processed), ha='center', va='center',
+                fontsize=22, fontweight='bold', color='#0F172A')
+        ax.text(0, -0.16, tr('processed'), ha='center', va='center',
+                fontsize=9, color='#64748B')
+        ax.set_title(tr('overall_processing_status'), loc='left', fontsize=12,
+                     fontweight='bold', color='#0F172A', pad=12)
+        ax.legend(wedges, labels, loc='lower center', bbox_to_anchor=(0.5, -0.10),
+                  ncol=2, frameon=False, fontsize=9, handlelength=1.0)
+        fig.subplots_adjust(left=0.08, right=0.92, top=0.84, bottom=0.18)
+        return FigureCanvas(fig)
     def create_processed_violation_pie_chart(self, processed_count, violating_count):
         from translations import tr
         
-        fig = Figure(figsize=(4, 4))
+        fig = Figure(figsize=(4.2, 3.2), facecolor="#FFFFFF")
         ax = fig.add_subplot(111)
 
         # 計算未違規的已處理圖表數量
-        non_violating_count = processed_count - violating_count
+        non_violating_count = max(0, processed_count - violating_count)
 
         labels = [tr('violating'), tr('normal')]
         sizes = [violating_count, non_violating_count]
-        colors = ['#ff6666', '#99ff99'] # Red and Green
+        colors = ['#EF4444', '#10B981']
 
         # 如果沒有成功處理的圖表，或者所有都已處理但都未違規
         if processed_count == 0 or (processed_count > 0 and violating_count == 0):
              labels = [tr('all_normal')]
              sizes = [processed_count if processed_count > 0 else 1] # 如果 processed_count=0，給個非零大小繪圖
-             colors = ['#99ff99']
+             colors = ['#10B981']
              if processed_count == 0: # 如果 processed_count=0，顯示 N/A 或無數據
                   labels = ['N/A']
                   sizes = [1]
-                  colors = ['#cccccc']
+                  colors = ['#CBD5E1']
 
 
         # 甜甜圈圖設定
-        wedgeprops = {'width': 0.3, 'edgecolor': 'white'}
+        wedgeprops = {'width': 0.24, 'edgecolor': '#FFFFFF', 'linewidth': 3}
 
-        ax.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%',
-               shadow=False, startangle=140, wedgeprops=wedgeprops, 
-               pctdistance=0.85, labeldistance=1.1,
-               textprops={'fontsize': 10})
+        wedges, _ = ax.pie(
+            sizes, colors=colors,
+            startangle=90, counterclock=False, wedgeprops=wedgeprops,
+        )
         ax.axis('equal')
-        ax.set_title(tr('violation_rate'), fontsize=12, pad=15) # <--- 增加標題
+        violation_rate = (violating_count / processed_count * 100) if processed_count else 0
+        ax.text(0, 0.08, f'{violation_rate:.0f}%', ha='center', va='center',
+                fontsize=22, fontweight='bold', color='#0F172A')
+        ax.text(0, -0.16, tr('violating'), ha='center', va='center',
+                fontsize=9, color='#64748B')
+        ax.set_title(tr('violation_rate'), loc='left', fontsize=12,
+                     fontweight='bold', color='#0F172A', pad=12)
+        ax.legend(wedges, labels, loc='lower center', bbox_to_anchor=(0.5, -0.10),
+                  ncol=2, frameon=False, fontsize=9, handlelength=1.0)
 
         # 確保圖表邊界有足夠空間
-        fig.subplots_adjust(left=0.1, right=0.9, top=0.85, bottom=0.15)
-
-        fig.patch.set_alpha(0)
-
-        canvas = FigureCanvas(fig)
-        return canvas
+        fig.subplots_adjust(left=0.08, right=0.92, top=0.84, bottom=0.18)
+        return FigureCanvas(fig)
     def create_anomaly_bar_chart(self, ooc_count, we_count, oob_count):
         from translations import tr
         
-        fig = Figure(figsize=(5, 4))
+        fig = Figure(figsize=(4.8, 3.2), facecolor="#FFFFFF")
         ax = fig.add_subplot(111)
 
         categories = [tr('ooc'), tr('we_rule'), tr('oob')]
         counts = [ooc_count, we_count, oob_count]
-        colors = ['#ff9999','#66b3ff','#99ff99'] # Red, Blue, Green
+        colors = ['#EF4444', '#F59E0B', '#8B5CF6']
 
-        bars = ax.bar(categories, counts, color=colors)
+        bars = ax.bar(categories, counts, color=colors, width=0.56, zorder=3)
 
         for bar in bars:
             yval = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2.0, yval, int(yval), va='bottom', ha='center', fontsize=8)
+            ax.text(bar.get_x() + bar.get_width()/2.0, yval, int(yval),
+                    va='bottom', ha='center', fontsize=9, fontweight='bold',
+                    color='#334155')
 
-        ax.set_ylabel(tr('number_of_charts'), fontsize=10)
-        ax.set_title(tr('charts_with_anomalies'), fontsize=12)
-        ax.set_ylim(0, max(counts) * 1.2 or 1)
+        ax.set_ylabel(tr('number_of_charts'), fontsize=9, color='#64748B')
+        ax.set_title(tr('charts_with_anomalies'), loc='left', fontsize=12,
+                     fontweight='bold', color='#0F172A', pad=12)
+        ax.set_ylim(0, max(counts) * 1.3 or 1)
+        ax.grid(axis='y', color='#E2E8F0', linewidth=0.8, zorder=0)
+        ax.tick_params(axis='both', colors='#64748B', labelsize=9, length=0)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_visible(False)
+        ax.spines['bottom'].set_color('#CBD5E1')
+        ax.set_axisbelow(True)
 
-        fig.tight_layout()
-        fig.patch.set_alpha(0)
+        fig.tight_layout(pad=1.6)
 
         canvas = FigureCanvas(fig)
         return canvas
@@ -4173,12 +5086,19 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                         return int(last_part.replace(',', ''))
                 return 0
             
-            total = extract_number(total_text)
-            processed = extract_number(processed_text)
-            skipped = extract_number(skipped_text)
-            ooc_count = extract_number(ooc_text)
-            we_count = extract_number(we_text)
-            oob_count = extract_number(oob_text)
+            def metric_value(label, fallback_text):
+                value = label.property("summaryValue")
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    return extract_number(fallback_text)
+
+            total = metric_value(self.total_charts_label_summary, total_text)
+            processed = metric_value(self.processed_charts_label_summary, processed_text)
+            skipped = metric_value(self.skipped_charts_label_summary, skipped_text)
+            ooc_count = metric_value(self.ooc_charts_label_summary, ooc_text)
+            we_count = metric_value(self.we_count_charts_label_summary, we_text)
+            oob_count = metric_value(self.oob_charts_label_summary, oob_text)
             
             # 清理舊圖表
             self.clear_summary_charts()
@@ -4186,8 +5106,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
             # 重新繪製圖表
             if total > 0:
                 self.status_pie_canvas = self.create_status_pie_chart(processed, skipped)
-                self.charts_horizontal_layout.addStretch()
-                self.charts_horizontal_layout.addWidget(self.status_pie_canvas)
+                self._add_summary_chart(self.status_pie_canvas)
             
             if processed > 0:
                 # 計算違規圖表數量
@@ -4200,17 +5119,11 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                         violating_count += 1
                 
                 self.processed_violation_pie_canvas = self.create_processed_violation_pie_chart(processed, violating_count)
-                self.charts_horizontal_layout.addStretch()
-                self.charts_horizontal_layout.addWidget(self.processed_violation_pie_canvas)
+                self._add_summary_chart(self.processed_violation_pie_canvas)
             
             if ooc_count > 0 or we_count > 0 or oob_count > 0:
                 self.anomaly_bar_canvas = self.create_anomaly_bar_chart(ooc_count, we_count, oob_count)
-                if self.charts_horizontal_layout.count() > 0 and not isinstance(self.charts_horizontal_layout.itemAt(self.charts_horizontal_layout.count()-1).spacerItem(), type(None)):
-                    self.charts_horizontal_layout.addStretch()
-                elif self.charts_horizontal_layout.count() == 0:
-                    self.charts_horizontal_layout.addStretch()
-                self.charts_horizontal_layout.addWidget(self.anomaly_bar_canvas)
-                self.charts_horizontal_layout.addStretch()
+                self._add_summary_chart(self.anomaly_bar_canvas)
             
             print("Summary charts refreshed with new language.")
         except Exception as e:
@@ -4249,12 +5162,12 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
 
 
         # 更新統計數字 Label 文本
-        self.total_charts_label_summary.setText(f"{tr('total_charts')} {total}")
-        self.processed_charts_label_summary.setText(f"{tr('processed_successfully')} {processed}")
-        self.skipped_charts_label_summary.setText(f"{tr('no_data_charts')} {skipped}")
-        self.ooc_charts_label_summary.setText(f"{tr('charts_with_ooc')} {ooc_count}")
-        self.we_count_charts_label_summary.setText(f"{tr('charts_with_we_rule')} {we_count}")
-        self.oob_charts_label_summary.setText(f"{tr('charts_with_oob')} {oob_count}")
+        self._set_summary_metric(self.total_charts_label_summary, tr('total_charts'), total)
+        self._set_summary_metric(self.processed_charts_label_summary, tr('processed_successfully'), processed)
+        self._set_summary_metric(self.skipped_charts_label_summary, tr('no_data_charts'), skipped)
+        self._set_summary_metric(self.ooc_charts_label_summary, tr('charts_with_ooc'), ooc_count)
+        self._set_summary_metric(self.we_count_charts_label_summary, tr('charts_with_we_rule'), we_count)
+        self._set_summary_metric(self.oob_charts_label_summary, tr('charts_with_oob'), oob_count)
 
 
         # --- 清理舊圖表並添加新圖表 ---
@@ -4262,8 +5175,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
 
         if total > 0:
              self.status_pie_canvas = self.create_status_pie_chart(processed, skipped)
-             self.charts_horizontal_layout.addStretch() # 左邊添加彈性空間
-             self.charts_horizontal_layout.addWidget(self.status_pie_canvas)
+             self._add_summary_chart(self.status_pie_canvas)
 
 
         # 添加成功處理圖表違規比例甜甜圈圖 (中間圖)
@@ -4272,21 +5184,11 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
              # violating_charts 列表已經是從 self.results (已處理圖表) 中篩選的
              violating_count_in_processed = len(violating_charts)
              self.processed_violation_pie_canvas = self.create_processed_violation_pie_chart(processed, violating_count_in_processed)
-             self.charts_horizontal_layout.addStretch() # 圓餅圖1和圓餅圖2之間添加彈性空間
-             self.charts_horizontal_layout.addWidget(self.processed_violation_pie_canvas)
+             self._add_summary_chart(self.processed_violation_pie_canvas)
 
         if ooc_count > 0 or we_count > 0 or oob_count > 0:
              self.anomaly_bar_canvas = self.create_anomaly_bar_chart(ooc_count, we_count, oob_count)
-
-             if self.charts_horizontal_layout.count() > 0 and not isinstance(self.charts_horizontal_layout.itemAt(self.charts_horizontal_layout.count()-1).spacerItem(), type(None)):
-                  # 如果最後一個 item 不是 stretch，則在其前面加 stretch
-                  self.charts_horizontal_layout.addStretch()
-             elif self.charts_horizontal_layout.count() == 0:
-                 # 如果目前為空，先加 stretch
-                 self.charts_horizontal_layout.addStretch()
-
-             self.charts_horizontal_layout.addWidget(self.anomaly_bar_canvas)
-             self.charts_horizontal_layout.addStretch() # 最右邊添加彈性空間
+             self._add_summary_chart(self.anomaly_bar_canvas)
 
         self.violation_table.setRowCount(len(violating_charts))
 
@@ -4350,6 +5252,30 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         progress_bar = QtWidgets.QProgressBar(self)
         progress_bar.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         return progress_bar
+
+    def _open_oob_progress_dialog(self):
+        """Create the OOB progress UI only for an explicitly started analysis."""
+        self._close_oob_progress_dialog()
+        self.start_button.setEnabled(False)
+        self.progress_bar = OOBProgressDialog(self)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("0%")
+        self.progress_bar.show()
+        QtWidgets.QApplication.processEvents()
+
+    def _close_oob_progress_dialog(self):
+        dialog = getattr(self, 'progress_bar', None)
+        if dialog is not None:
+            dialog.hide()
+            dialog.deleteLater()
+            self.progress_bar = None
+        if hasattr(self, 'start_button'):
+            self.start_button.setEnabled(True)
+
+    def _check_oob_cancelled(self):
+        dialog = getattr(self, 'progress_bar', None)
+        if dialog is not None and dialog.wasCanceled():
+            raise OOBAnalysisCancelled()
 
     def create_image_label(self, image_path: str, max_width=450, max_height=350, keep_original_size=False):
         try:
@@ -4422,7 +5348,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                 print(f"  - 使用快取的 CSV: {os.path.basename(filepath)}")
             
             # 返回副本避免修改快取的資料
-            return self.csv_cache[filepath].copy()
+            return self.csv_cache[filepath]
         except Exception as e:
             print(f"[Error] 讀取檔案 {filepath} 失敗: {str(e)}")
             return None
@@ -4439,22 +5365,23 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
             if not self.ensure_charts_selected():
                 return
             self.validate_files_and_directories()
-            self.progress_bar.show()  # 顯示進度條
-            self.progress_bar.setValue(0)
-            self.progress_bar.setFormat("0%")
+            self._open_oob_progress_dialog()
             self.clear_image_grid()
+            self.image_grid_widget.setUpdatesEnabled(False)
 
             all_charts_info = load_chart_information(self.filepath)
             all_charts_info = self.filter_chart_information(all_charts_info)
             total_charts_count = len(all_charts_info)
             self.progress_bar.setMaximum(100)
 
+            # 每次執行重建檔案索引與 CSV 快取。
+            self.csv_cache.clear()
+            raw_file_map = self._build_raw_file_map(all_charts_info)
+
             # 性能優化：預處理所有圖表的數據類型
             print("=== 性能優化：開始預處理數據類型 ===")
-            self.preprocess_chart_types(all_charts_info)
-            
-            # 清空 CSV 快取（如果之前有的話）
-            self.csv_cache.clear()
+            self.preprocess_chart_types(all_charts_info, raw_file_map)
+
             print("=== 預處理完成，開始處理圖表 ===")
 
             # if self.display_gui_checkbox.isChecked():
@@ -4484,13 +5411,14 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                 print(f" - 自定義時間範圍: {custom_weekly_start} to {custom_weekly_end}")
 
             for i, (_, chart_info) in enumerate(all_charts_info.iterrows()):
+                self._check_oob_cancelled()
                 group_name = str(chart_info['GroupName'])
                 chart_name = str(chart_info['ChartName'])
                 chart_key = f"{group_name}_{chart_name}"
                 print(f"\n正在處理圖表: GroupName={group_name}, ChartName={chart_name}")
 
                 try:
-                    filepath = find_matching_file(self.raw_data_directory, group_name, chart_name)
+                    filepath = raw_file_map.get(chart_key)
                     
                     if filepath and os.path.exists(filepath):
                         # 性能優化：使用快取讀取 CSV
@@ -4526,7 +5454,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
 
                                 # 性能優化：減少假進度條的步數，降低 GUI 更新頻率
                                 fake_steps = 5  # 從 10 減少到 5
-                                for fake_step in range(fake_steps):
+                                for fake_step in range(1):
                                     # 調整進度計算：20%已用於預處理，剩餘80%用於圖表處理
                                     progress_base = 20 + int(((i / total_charts_count) * 80))
                                     progress_step = int((fake_step / fake_steps) * (80 / total_charts_count))
@@ -4535,6 +5463,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                                     self.progress_bar.setFormat(f"{percent}% - {tr('processing')} {group_name}/{chart_name}")
                                     if fake_step % 2 == 0:  # 只在偶數步驟更新 GUI
                                         QtWidgets.QApplication.processEvents()
+                                        self._check_oob_cancelled()
                                     time.sleep(0.005)  # 從 0.01 減少到 0.005
 
                                 # 從設定中檢查是否使用互動式圖表和 Batch_ID 標籤
@@ -4569,6 +5498,8 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                         print(f"[Info] 圖表 {group_name}/{chart_name} 對應檔案 {filepath} 不存在，跳過處理。")
                         skipped_charts_count += 1
 
+                except OOBAnalysisCancelled:
+                    raise
                 except FileNotFoundError:
                     print(f"[Warning] 檔案未找到，跳過圖表: {group_name}/{chart_name}")
                     skipped_charts_count += 1
@@ -4584,21 +5515,29 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                     self.progress_bar.setValue(percent)
                     self.progress_bar.setFormat(f"{percent}% - {processed_charts_count}/{total_charts_count} {tr('processed')}")
                     QtWidgets.QApplication.processEvents()
+                    self._check_oob_cancelled()
 
-            # 最終更新進度條
-            self.progress_bar.setValue(100)
-            self.progress_bar.setFormat(f"100% - {tr('complete')}!")
+            # 圖表處理完成後仍需整理摘要與寫入 Excel。
+            self.image_grid_widget.setUpdatesEnabled(True)
+            self.image_grid_widget.update()
+            self.progress_bar.setValue(98)
+            self.progress_bar.setFormat(f"98% - {tr('finalizing_results')}")
             QtWidgets.QApplication.processEvents()
-            
-            # 3 秒後自動隱藏進度條
-            QtCore.QTimer.singleShot(3000, self.progress_bar.hide)
 
             self.update_summary_dashboard(total_charts_count, processed_charts_count, skipped_charts_count)
 
             if self.results:
                 self.save_results()
+                self.progress_bar.setValue(100)
+                self.progress_bar.setFormat(f"100% - {tr('complete')}!")
+                QtWidgets.QApplication.processEvents()
+                self._close_oob_progress_dialog()
                 QtWidgets.QMessageBox.information(self, "Processing Complete", "Results have been saved to result_with_images.xlsx")
             else:
+                self.progress_bar.setValue(100)
+                self.progress_bar.setFormat(f"100% - {tr('complete')}!")
+                QtWidgets.QApplication.processEvents()
+                self._close_oob_progress_dialog()
                 QtWidgets.QMessageBox.information(self, "Processing Complete", "No charts were processed successfully to save.")
 
             # 清理快取（可選）
@@ -4606,15 +5545,73 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
             # 如果記憶體有限，可以清空快取
             # self.csv_cache.clear()
 
+        except OOBAnalysisCancelled:
+            self.results = []
+            self.clear_image_grid()
+            self._close_oob_progress_dialog()
+            QtWidgets.QMessageBox.information(
+                self,
+                tr("processing_cancelled_title"),
+                tr("processing_cancelled_message"),
+            )
         except FileNotFoundError as e:
+            self._close_oob_progress_dialog()
             self.show_error("File Error", str(e))
         except NotADirectoryError as e:
+            self._close_oob_progress_dialog()
             self.show_error("Directory Error", str(e))
         except Exception as e:
+            self._close_oob_progress_dialog()
             self.show_error("Processing Error", str(e))
             traceback.print_exc()
+        finally:
+            if hasattr(self, 'image_grid_widget'):
+                self.image_grid_widget.setUpdatesEnabled(True)
 
     # --- 新增清理 Grid Layout 的方法 (針對第一個分頁) ---
+    def _show_oob_empty_state(self):
+        if self.oob_empty_state_widget is not None:
+            return
+        empty_card = QtWidgets.QFrame()
+        empty_card.setObjectName("OOBEmptyState")
+        empty_card.setMinimumHeight(300)
+        empty_layout = QtWidgets.QVBoxLayout(empty_card)
+        empty_layout.setContentsMargins(36, 36, 36, 36)
+        empty_layout.setSpacing(8)
+        empty_layout.addStretch()
+
+        badge = QtWidgets.QLabel("OOB")
+        badge.setObjectName("OOBEmptyBadge")
+        badge.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        badge.setFixedSize(58, 58)
+        self.oob_empty_title_label = QtWidgets.QLabel(tr("oob_empty_title"))
+        self.oob_empty_title_label.setObjectName("OOBEmptyTitle")
+        self.oob_empty_title_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.oob_empty_desc_label = QtWidgets.QLabel(tr("oob_empty_desc"))
+        self.oob_empty_desc_label.setObjectName("OOBEmptyDescription")
+        self.oob_empty_desc_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.oob_empty_desc_label.setWordWrap(True)
+        self.oob_empty_desc_label.setMinimumSize(420, 48)
+        self.oob_empty_desc_label.setMaximumWidth(620)
+        self.oob_empty_desc_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.MinimumExpanding,
+        )
+
+        empty_layout.addWidget(badge, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        empty_layout.addWidget(self.oob_empty_title_label)
+        empty_layout.addWidget(self.oob_empty_desc_label, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        empty_layout.addStretch()
+        self.oob_empty_state_widget = empty_card
+        self.image_grid_layout.addWidget(empty_card, 0, 0, 1, 3)
+
+    def _remove_oob_empty_state(self):
+        if self.oob_empty_state_widget is None:
+            return
+        self.image_grid_layout.removeWidget(self.oob_empty_state_widget)
+        self.oob_empty_state_widget.deleteLater()
+        self.oob_empty_state_widget = None
+
     def clear_image_grid(self):
         print("Clearing image grid...")
         if self.header_container and self.processing_tab_widget.layout() and self.processing_tab_widget.layout().indexOf(self.header_container) != -1:
@@ -4633,6 +5630,8 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                     item.widget().deleteLater()
                 elif item.layout():
                      self.clear_layout(item.layout())
+        self.oob_empty_state_widget = None
+        self._show_oob_empty_state()
         print("Image grid cleared.")
 
     def clear_layout(self, layout):
@@ -4678,7 +5677,24 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         elif filter_type == "Production Line":
             self.filter_value_combo.addItems(["7", "11", "5", "8", "6", "9", "4", "10"])
 
-    def preprocess_chart_types(self, all_charts_info):
+    def _build_raw_file_map(self, all_charts_info):
+        """Resolve all chart CSV paths from one directory listing."""
+        filenames = os.listdir(self.raw_data_directory)
+        file_map = {}
+        for chart_info in all_charts_info.itertuples(index=False):
+            group_name = str(getattr(chart_info, 'GroupName'))
+            chart_name = str(getattr(chart_info, 'ChartName'))
+            chart_key = f"{group_name}_{chart_name}"
+            pattern = re.compile(
+                rf"{re.escape(group_name)}_{re.escape(chart_name)}(?:_\d+_\d+)?\.csv$"
+            )
+            filename = next((name for name in filenames if pattern.match(name)), None)
+            file_map[chart_key] = (
+                os.path.join(self.raw_data_directory, filename) if filename else None
+            )
+        return file_map
+
+    def preprocess_chart_types(self, all_charts_info, file_map=None):
         """
         性能優化：一次性預處理所有圖表的數據類型，避免重複計算
         """
@@ -4696,15 +5712,23 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
             progress = int((i / total_charts) * 20)  # 預處理占總進度的20%
             self.progress_bar.setValue(progress)
             self.progress_bar.setFormat(f"{tr('preprocessing_chart_types')} {i+1}/{total_charts}")
-            QtWidgets.QApplication.processEvents()
+            if i % 5 == 0 or i + 1 == total_charts:
+                QtWidgets.QApplication.processEvents()
+                self._check_oob_cancelled()
             
             # 找到對應的 CSV 文件
-            filepath = find_matching_file(self.raw_data_directory, group_name, chart_name)
+            filepath = (
+                file_map.get(chart_key)
+                if file_map is not None
+                else find_matching_file(self.raw_data_directory, group_name, chart_name)
+            )
             
             if filepath and os.path.exists(filepath) and filepath not in processed_files:
                 try:
-                    # 快速讀取部分數據來判斷類型（只需要 point_val 欄位）
-                    raw_df = pd.read_csv(filepath, nrows=1000)
+                    # 完整 CSV 僅讀取一次並留在快取；類型判斷仍只使用前 1000 筆。
+                    full_df = pd.read_csv(filepath)
+                    self.csv_cache[filepath] = full_df
+                    raw_df = full_df.head(1000)
                     customer_result = self.filter_customer_data(raw_df, os.path.basename(filepath))
                     if customer_result.missing_column or customer_result.data.empty:
                         chart_types[chart_key] = 'continuous'
@@ -4747,7 +5771,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                 print(f"  CSV 讀取錯誤 {filepath}: {e}")
                 return None
         
-        return self.csv_cache[filepath].copy() if self.csv_cache[filepath] is not None else None
+        return self.csv_cache[filepath] if self.csv_cache[filepath] is not None else None
 
 
     def analyze_chart(self, execution_time, raw_df, chart_info, use_interactive_charts=False, use_batch_id_labels=False, custom_weekly_start=None, custom_weekly_end=None):
@@ -4818,8 +5842,17 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                                                     initial_baseline_start_date, baseline_end_date)
             else:
                 print(f" - analyze_chart: 執行連續型流程 for {group_name}/{chart_name}")
-                result = process_single_chart(chart_info.copy(), raw_df, initial_baseline_start_date, 
-                                            baseline_end_date, weekly_start_date, weekly_end_date)
+                result = process_single_chart(
+                    chart_info.copy(),
+                    raw_df,
+                    initial_baseline_start_date,
+                    baseline_end_date,
+                    weekly_start_date,
+                    weekly_end_date,
+                    enable_record_high_low=self.oob_settings.get(
+                        'enable_record_high_low', False
+                    ),
+                )
                 if result:
                     result['data_type'] = 'continuous'
 
@@ -4835,30 +5868,55 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                 'record_high': result.get('record_high', False),
                 'record_low': result.get('record_low', False)
             }
+            rule_results = precompute_weekly_rule_results(
+                raw_df, chart_info, weekly_start_date, weekly_end_date
+            )
             
             if use_interactive_charts:
                 # 生成互動式 SPC 圖表（返回 FigureCanvas）
-                spc_canvas, violated_rules = plot_spc_chart_interactive(raw_df, chart_info, weekly_start_date, weekly_end_date, record_results=record_results, use_batch_id_labels=use_batch_id_labels)
+                spc_canvas, violated_rules = plot_spc_chart_interactive(
+                    raw_df, chart_info, weekly_start_date, weekly_end_date,
+                    record_results=record_results,
+                    use_batch_id_labels=use_batch_id_labels,
+                    precomputed_rule_results=rule_results,
+                )
                 print(f" - analyze_chart: plot_spc_chart_interactive 完成")
 
                 # 生成互動式週圖表（返回 FigureCanvas）
-                weekly_canvas = plot_weekly_spc_chart_interactive(raw_df, chart_info, weekly_start_date, weekly_end_date, record_results=record_results, use_batch_id_labels=use_batch_id_labels)
+                weekly_canvas = plot_weekly_spc_chart_interactive(
+                    raw_df, chart_info, weekly_start_date, weekly_end_date,
+                    record_results=record_results,
+                    use_batch_id_labels=use_batch_id_labels,
+                    precomputed_rule_results=rule_results,
+                )
                 print(f" - analyze_chart: plot_weekly_spc_chart_interactive 完成")
                 
                 # 為了保持相容性，仍然保存靜態圖片版本供 Excel 使用
-                image_path, _ = plot_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date)
-                weekly_image_path = plot_weekly_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date)
+                image_path, _ = plot_spc_chart(
+                    raw_df, chart_info, weekly_start_date, weekly_end_date,
+                    precomputed_rule_results=rule_results,
+                )
+                weekly_image_path = plot_weekly_spc_chart(
+                    raw_df, chart_info, weekly_start_date, weekly_end_date,
+                    precomputed_rule_results=rule_results,
+                )
                 
                 # 儲存 canvas 供 UI 使用
                 result['spc_canvas'] = spc_canvas
                 result['weekly_canvas'] = weekly_canvas
             else:
                 # 生成靜態 SPC 圖表
-                image_path, violated_rules = plot_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date)
+                image_path, violated_rules = plot_spc_chart(
+                    raw_df, chart_info, weekly_start_date, weekly_end_date,
+                    precomputed_rule_results=rule_results,
+                )
                 print(f" - analyze_chart: plot_spc_chart 完成，image_path: {image_path}")
 
                 # 生成靜態週圖表
-                weekly_image_path = plot_weekly_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date)
+                weekly_image_path = plot_weekly_spc_chart(
+                    raw_df, chart_info, weekly_start_date, weekly_end_date,
+                    precomputed_rule_results=rule_results,
+                )
                 print(f" - analyze_chart: plot_weekly_spc_chart 完成，weekly_image_path: {weekly_image_path}")
 
             # Cpk 計算
@@ -4870,6 +5928,19 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
             # 更新結果
             result['violated_rules'] = violated_rules if violated_rules is not None else {}
             self.build_result(result, image_path, weekly_image_path)
+
+            if self.oob_settings.get('show_by_tool_charts', False):
+                # By Tool 圖僅影響顯示，不改變既有 OOB／SPC 計算結果。
+                try:
+                    result['by_tool_time_canvas'] = plot_spc_by_tool_time(
+                        raw_df, chart_info, weekly_start_date, weekly_end_date
+                    )
+                    result['by_tool_group_canvas'] = plot_spc_by_tool_time_grouping(
+                        raw_df, chart_info, weekly_start_date, weekly_end_date
+                    )
+                except Exception as chart_error:
+                    logger.exception("Failed to create By Tool charts: %s", chart_error)
+                    result['by_tool_chart_error'] = str(chart_error)
 
             print(f" - analyze_chart 處理完成並返回結果 for {group_name}/{chart_name}")
             return result
@@ -4886,6 +5957,9 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         """
         group_name = chart_info.get('group_name', 'Unknown')
         chart_name = chart_info.get('chart_name', 'Unknown')
+        record_high_low_enabled = bool(
+            getattr(self, 'oob_settings', {}).get('enable_record_high_low', False)
+        )
         
         print(f" - _process_discrete_chart: 開始離散型專用處理 {group_name}/{chart_name}")
         
@@ -5000,14 +6074,15 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                     actual_baseline_start_date, baseline_end_date
                 )
                 
-                # === Record High Low 計算 ===
-                # DEBUG: 輸出時間範圍信息
-                logger.debug("基線時間範圍 - 從 %s 到 %s", actual_baseline_start_date, baseline_end_date)
-                logger.debug("當週時間範圍 - 從 %s 到 %s", weekly_start_date, weekly_end_date)
-                logger.debug("基線結束與當週開始間隔 = %s", weekly_start_date - baseline_end_date)
-                record_results = record_high_low_calculator(
-                    weekly_data['point_val'].values, 
-                    baseline_data['point_val'].values
+                # === Record High Low 計算（可選，預設關閉）===
+                if record_high_low_enabled:
+                    logger.debug("基線時間範圍 - 從 %s 到 %s", actual_baseline_start_date, baseline_end_date)
+                    logger.debug("當週時間範圍 - 從 %s 到 %s", weekly_start_date, weekly_end_date)
+                    logger.debug("基線結束與當週開始間隔 = %s", weekly_start_date - baseline_end_date)
+                record_results = optional_record_high_low_calculator(
+                    weekly_data['point_val'].values,
+                    baseline_data['point_val'].values,
+                    enabled=record_high_low_enabled,
                 )
                 
                 # === 更新結果 ===
@@ -5036,7 +6111,11 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                     'HL_trending': OOB_INSUFFICIENT_DATA,
                     'HL_high_OOC': ooc_highlight,
                     'HL_category_LT_shift': OOB_INSUFFICIENT_DATA,
-                    'HL_record_high_low': OOB_INSUFFICIENT_DATA,
+                    'HL_record_high_low': (
+                        OOB_INSUFFICIENT_DATA
+                        if record_high_low_enabled
+                        else 'NO_HIGHLIGHT'
+                    ),
                     'record_high': False,
                     'record_low': False,
                     'OOB_Status': OOB_ERROR if ooc_highlight == OOB_ERROR else OOB_INSUFFICIENT_DATA,
@@ -5146,9 +6225,12 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
              self.show_error("Save Error", f"Failed to save results to Excel: {e}")
 
     def display_image(self, result, index):
+        if index == 0:
+            self._remove_oob_empty_state()
         # 檢查是否有互動式圖表 canvas
         spc_canvas = result.get('spc_canvas')
         weekly_canvas = result.get('weekly_canvas')
+        show_by_tool = self.oob_settings.get('show_by_tool_charts', False)
         
         if spc_canvas:
             # 使用互動式 SPC 圖表
@@ -5179,9 +6261,60 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         info_layout = QtWidgets.QVBoxLayout()
         info_layout.addWidget(self.create_info_label(result))
 
-        self.image_grid_layout.addLayout(spc_chart_layout, index, 0)
-        self.image_grid_layout.addLayout(weekly_chart_layout, index, 1)
-        self.image_grid_layout.addLayout(info_layout, index, 2)
+        by_tool_time_layout = None
+        by_tool_group_layout = None
+        if show_by_tool:
+            by_tool_time_canvas = result.get('by_tool_time_canvas')
+            by_tool_group_canvas = result.get('by_tool_group_canvas')
+            unavailable_message = result.get('by_tool_chart_error', tr('by_tool_missing_column'))
+            if by_tool_time_canvas is not None:
+                by_tool_time_layout = self.create_canvas_layout(
+                    by_tool_time_canvas, min_width=350, min_height=150
+                )
+            else:
+                by_tool_time_layout = self._create_chart_unavailable_layout(
+                    tr('show_by_tool_time_title'), unavailable_message
+                )
+            if by_tool_group_canvas is not None:
+                by_tool_group_layout = self.create_canvas_layout(
+                    by_tool_group_canvas, min_width=350, min_height=150
+                )
+            else:
+                by_tool_group_layout = self._create_chart_unavailable_layout(
+                    tr('show_by_tool_group_title'), unavailable_message
+                )
+
+        result_card = QtWidgets.QFrame()
+        result_card.setObjectName("OOBResultCard")
+        result_layout = QtWidgets.QGridLayout(result_card)
+        result_layout.setContentsMargins(16, 16, 16, 16)
+        result_layout.setHorizontalSpacing(16)
+        result_layout.setVerticalSpacing(14)
+        result_layout.addLayout(spc_chart_layout, 0, 0)
+        result_layout.addLayout(weekly_chart_layout, 0, 1)
+        if show_by_tool:
+            result_layout.addLayout(by_tool_time_layout, 1, 0)
+            result_layout.addLayout(by_tool_group_layout, 1, 1)
+            result_layout.addLayout(info_layout, 0, 2, 2, 1)
+        else:
+            result_layout.addLayout(info_layout, 0, 2)
+        result_layout.setColumnStretch(0, 4)
+        result_layout.setColumnStretch(1, 4)
+        result_layout.setColumnStretch(2, 2)
+        self.image_grid_layout.addWidget(result_card, index, 0, 1, 3)
+
+    def _create_chart_unavailable_layout(self, title, message):
+        layout = QtWidgets.QVBoxLayout()
+        label = QtWidgets.QLabel(f"{title}\n{message}")
+        label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        label.setWordWrap(True)
+        label.setMinimumSize(350, 150)
+        label.setStyleSheet(
+            "color: #64748B; background-color: #F8FAFC; border: 1px dashed #CBD5E1; "
+            "border-radius: 10px; padding: 14px; font-weight: 500;"
+        )
+        layout.addWidget(label)
+        return layout
 
     def create_image_layout(self, image_path):
         layout = QtWidgets.QVBoxLayout()
@@ -5277,6 +6410,10 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                         new_canvas = plot_weekly_spc_chart_interactive(raw_df_arg, chart_info_arg, ws_arg, we_arg, use_batch_id_labels=use_batch_id_arg)
                     except Exception:
                         new_canvas = None
+                elif kind == 'spc_by_tool_time':
+                    new_canvas = plot_spc_by_tool_time(raw_df_arg, chart_info_arg, ws_arg, we_arg)
+                elif kind == 'spc_by_tool_group':
+                    new_canvas = plot_spc_by_tool_time_grouping(raw_df_arg, chart_info_arg, ws_arg, we_arg)
         except Exception:
             new_canvas = None
 
@@ -5509,7 +6646,8 @@ class SplitDataWidget(QtWidgets.QWidget):
         self.process_button.setText(tr('start_processing'))
         
         # 更新進度條
-        self.progress_bar.setFormat(tr('processing_progress'))
+        if self.progress_bar is not None:
+            self.progress_bar.setFormat(tr('processing_progress'))
         
         # 更新狀態標籤
         if self.status_label.text() == "Ready." or self.status_label.text() == "準備就緒。":
@@ -5629,17 +6767,12 @@ class SplitDataWidget(QtWidgets.QWidget):
         main_layout.addLayout(button_layout, 4, 0, 1, 2) # Row 4, Col 0, Span 1 row, 2 columns
 
         # --- Progress bar and status message ---
-        self.progress_bar = QtWidgets.QProgressBar()
-        self.progress_bar.setTextVisible(True)
-        self.progress_bar.setFormat(tr('processing_progress'))
-        self.progress_bar.setValue(0)
-        self.progress_bar.setVisible(False) # Hidden by default
+        self.progress_bar = None
 
         self.status_label = QtWidgets.QLabel(tr('ready'))
         self.status_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.status_label.setStyleSheet("color: #607D8B; font-style: italic;")
 
-        main_layout.addWidget(self.progress_bar, 5, 0, 1, 2) # Row 5
         main_layout.addWidget(self.status_label, 6, 0, 1, 2) # Row 6
         main_layout.setRowStretch(7, 1) # 將所有內容推到頂部
 
@@ -5688,7 +6821,7 @@ class SplitDataWidget(QtWidgets.QWidget):
         """應用 QSS 樣式表。"""
         self.setStyleSheet("""
             QWidget {
-                font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
+                font-family: "Segoe UI", "Microsoft JhengHei", "Yu Gothic UI", "Malgun Gothic", "Meiryo UI", sans-serif;
                 font-size: 14px;
                 color: #333;
             }
@@ -5768,6 +6901,20 @@ class SplitDataWidget(QtWidgets.QWidget):
                 border-radius: 5px;
             }
         """)
+
+        from modern_ui import apply_modern_feature_page
+        apply_modern_feature_page(
+            self,
+            primary_buttons=(self.process_button,),
+            secondary_buttons=(
+                self.input_button,
+                self.output_button,
+                self.download_example_button,
+                self.download_type2_example_button,
+            ),
+            cards=(self.input_group_box, self.output_group_box, self.mode_group_box),
+            status_labels=(self.status_label,),
+        )
 
     def _update_processing_mode(self, index):
         """根據下拉選單的選擇更新內部處理模式。"""
@@ -5986,9 +7133,17 @@ class SplitDataWidget(QtWidgets.QWidget):
             QtWidgets.QMessageBox.critical(self, "Error", f"Unable to create 'raw_charts' folder: {final_output_folder}\nError message: {e}")
             return
         
-        # Show progress bar
-        self.progress_bar.setVisible(True)
+        from modern_ui import ModernProgressDialog
+        self.progress_bar = ModernProgressDialog(
+            tr("split_progress_title", "Splitting CSV Data"),
+            tr("split_progress_preparing", "Preparing input files..."),
+            0,
+            100,
+            self,
+        )
+        self.progress_bar.show()
         self.progress_bar.setValue(0)
+        self.process_button.setEnabled(False)
         self.status_label.setText("Starting file processing...")
         QtWidgets.QApplication.processEvents() # Force UI update
 
@@ -5999,6 +7154,9 @@ class SplitDataWidget(QtWidgets.QWidget):
         for i, input_path in enumerate(input_paths):
             success = False
             self.status_label.setText(f"Processing file {i+1}/{total_files}: {os.path.basename(input_path)}")
+            self.progress_bar.setLabelText(
+                f"{tr('processing', 'Processing')} {i+1}/{total_files}: {os.path.basename(input_path)}"
+            )
             # Update overall progress bar (evenly distribute progress for each file)
             overall_progress = int((i / total_files) * 100) 
             self.progress_bar.setValue(overall_progress)
@@ -6026,7 +7184,12 @@ class SplitDataWidget(QtWidgets.QWidget):
         
         # Processing complete, set progress bar to 100%
         self.progress_bar.setValue(100)
-        self.progress_bar.setVisible(False) # Hide progress bar after completion
+        self.progress_bar.setLabelText(tr("complete", "Complete"))
+        QtWidgets.QApplication.processEvents()
+        self.progress_bar.close()
+        self.progress_bar.deleteLater()
+        self.progress_bar = None
+        self.process_button.setEnabled(True)
 
         if processed_count > 0:
             if not failed_files:
@@ -6192,6 +7355,9 @@ class CLTightenWidget(QtWidgets.QWidget):
         # 更新按鈕文字
         self.start_button.setText(tr("start_cl_calculation"))
         self.export_button.setText(f"📁 {tr('export_results')}")
+        if hasattr(self, 'page_title_label'):
+            self.page_title_label.setText(tr("cl_tighten"))
+            self.page_subtitle_label.setText(tr("cl_tighten_subtitle"))
         
         # 更新 Range 標籤
         if hasattr(self, 'range_label'):
@@ -6228,8 +7394,17 @@ class CLTightenWidget(QtWidgets.QWidget):
     def init_ui(self):
         """初始化 UI - 頂部對齊優化版"""
         main_layout = QtWidgets.QVBoxLayout(self)
-        main_layout.setContentsMargins(15, 15, 15, 15)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(24, 22, 24, 24)
+        main_layout.setSpacing(16)
+
+        self.page_title_label = QtWidgets.QLabel(tr("cl_tighten"))
+        self.page_subtitle_label = QtWidgets.QLabel(tr(
+            "cl_tighten_subtitle",
+            "Compare current control limits and focus on charts that need adjustment."
+        ))
+        self.page_subtitle_label.setWordWrap(True)
+        main_layout.addWidget(self.page_title_label)
+        main_layout.addWidget(self.page_subtitle_label)
 
         # === 1. 頂部工具列容器 (使用控制高度的 Widget 代替 GroupBox) ===
         top_toolbar = QtWidgets.QWidget()
@@ -6263,15 +7438,29 @@ class CLTightenWidget(QtWidgets.QWidget):
         self.start_date_edit.setCalendarPopup(True)
         self.start_date_edit.setDisplayFormat("yyyy-MM-dd")
         self.start_date_edit.setDateTime(QDateTime.currentDateTime().addYears(-2))
-        self.start_date_edit.setFixedWidth(120)
-        self.start_date_edit.setFixedHeight(32) # 統一高度
+        self.start_date_edit.setFixedSize(132, 32)
+        self.start_date_edit.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
 
         self.end_date_edit = QDateTimeEdit()
         self.end_date_edit.setCalendarPopup(True)
         self.end_date_edit.setDisplayFormat("yyyy-MM-dd")
         self.end_date_edit.setDateTime(QDateTime.currentDateTime())
-        self.end_date_edit.setFixedWidth(120)
-        self.end_date_edit.setFixedHeight(32) # 統一高度
+        self.end_date_edit.setFixedSize(132, 32)
+        self.end_date_edit.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+
+        # 保留原字級並預留足夠空間，避免日期末尾被日曆按鈕遮住。
+        compact_date_style = """
+            QDateTimeEdit {
+                padding: 4px 6px;
+                padding-right: 24px;
+                font-size: 14px;
+            }
+            QDateTimeEdit::drop-down {
+                width: 20px;
+            }
+        """
+        self.start_date_edit.setStyleSheet(compact_date_style)
+        self.end_date_edit.setStyleSheet(compact_date_style)
 
         toolbar_layout.addWidget(self.start_date_edit)
         toolbar_layout.addSpacing(3) # 減少日期選擇器之間的間距
@@ -6312,10 +7501,7 @@ class CLTightenWidget(QtWidgets.QWidget):
         self.export_button.clicked.connect(self.export_results)
 
         # --- 進度條區 (靠左顯示) ---
-        self.progress_bar = ModernProgressBar()
-        self.progress_bar.setFixedHeight(32) # 與按鈕和時間選擇器統一高度
-        self.progress_bar.setVisible(False)
-        toolbar_layout.addWidget(self.progress_bar) # 進度條也靠左
+        self.progress_bar = None
 
         # === 在所有元件之後加入彈簧，把所有內容推到左邊 ===
         toolbar_layout.addStretch(1)
@@ -6333,6 +7519,18 @@ class CLTightenWidget(QtWidgets.QWidget):
         content_layout.addWidget(left_panel)
         content_layout.addWidget(right_panel, 1)
         main_layout.addLayout(content_layout, 1)
+
+        self.chart_list_panel.setStyleSheet("")
+        self.chart_detail_panel.setStyleSheet("")
+        from modern_ui import apply_modern_feature_page
+        apply_modern_feature_page(
+            self,
+            primary_buttons=(self.start_button,),
+            secondary_buttons=(self.export_button,),
+            cards=(top_toolbar, self.chart_list_panel, self.chart_detail_panel),
+            title_labels=(self.page_title_label,),
+            subtitle_labels=(self.page_subtitle_label,),
+        )
     def create_chart_list_panel(self):
             """創建左側圖表清單面板"""
             self.chart_list_panel = QtWidgets.QGroupBox(tr("chart_list"))
@@ -6520,6 +7718,7 @@ class CLTightenWidget(QtWidgets.QWidget):
             return self.chart_detail_panel
             
     def start_calculation(self):
+        progress_dialog = None
         """開始CL計算"""
         try:
             if hasattr(self.parent_app, 'ensure_charts_selected') and not self.parent_app.ensure_charts_selected():
@@ -6556,16 +7755,24 @@ class CLTightenWidget(QtWidgets.QWidget):
             )
             
             # 顯示並重置進度條
-            self.progress_bar.setVisible(True)
-            self.progress_bar.setValue(0)
-            self.progress_bar.setFormat("Preparing...")
+            from modern_ui import ModernProgressDialog
+            progress_dialog = ModernProgressDialog(
+                tr("cl_progress_title", "Calculating Control Limits"),
+                tr("cl_progress_preparing", "Preparing chart data..."),
+                0,
+                0,
+                self,
+            )
+            self.progress_bar = progress_dialog
+            self.start_button.setEnabled(False)
+            progress_dialog.show()
             QtWidgets.QApplication.processEvents()
             
             def progress_callback(current, total):
-                self.progress_bar.setMaximum(total)
-                self.progress_bar.setValue(current)
+                progress_dialog.setRange(0, max(1, total))
+                progress_dialog.setValue(current)
                 # 顯示格式：目前/總數
-                self.progress_bar.setFormat(f"{current} / {total}")
+                progress_dialog.setLabelText(f"{current} / {total}")
                 QtWidgets.QApplication.processEvents()
 
             # 執行計算
@@ -6574,13 +7781,9 @@ class CLTightenWidget(QtWidgets.QWidget):
                 progress_callback=progress_callback
             )
             
-            # 完成後隱藏進度條或設為 100%
-            self.progress_bar.setValue(self.progress_bar.maximum())
-            self.progress_bar.setFormat("Done!")
-            
-            # 2秒後隱藏進度條
-            QtCore.QTimer.singleShot(2000, lambda: self.progress_bar.setVisible(False))
-            # self.progress_bar.setVisible(False) # 選擇性：完成後是否隱藏
+            progress_dialog.setValue(progress_dialog.maximum())
+            progress_dialog.setLabelText(tr("complete", "Complete"))
+            QtWidgets.QApplication.processEvents()
             
             if results_df is not None and not results_df.empty:
                 self.results_df = results_df  # 保存結果 DataFrame 以供匯出使用
@@ -6591,6 +7794,12 @@ class CLTightenWidget(QtWidgets.QWidget):
                 
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Calculation failed: {str(e)}")
+        finally:
+            if progress_dialog is not None:
+                progress_dialog.close()
+                progress_dialog.deleteLater()
+            self.progress_bar = None
+            self.start_button.setEnabled(True)
             
     def load_results(self, results_df):
         """載入計算結果"""
@@ -7408,6 +8617,17 @@ class CLTightenWidget(QtWidgets.QWidget):
         )
         
         if file_path:
+            from modern_ui import ModernProgressDialog
+            progress = ModernProgressDialog(
+                tr("export_progress", "Export Progress"),
+                tr("exporting_results", "Saving results to Excel..."),
+                0,
+                0,
+                self,
+            )
+            self.export_button.setEnabled(False)
+            progress.show()
+            QtWidgets.QApplication.processEvents()
             try:
                 # 如果有 calculator 和結果 DataFrame，使用完整的匯出功能（包含圖片）
                 if hasattr(self, 'calculator') and hasattr(self, 'results_df') and self.results_df is not None:
@@ -7430,6 +8650,10 @@ class CLTightenWidget(QtWidgets.QWidget):
             except Exception as e:
                 QtWidgets.QMessageBox.critical(self, "Error", 
                     f"Export failed: {str(e)}")
+            finally:
+                progress.close()
+                progress.deleteLater()
+                self.export_button.setEnabled(True)
 
 if __name__ == "__main__":
     # ========== 編碼與環境設定（防止 Big5 環境閃退）==========

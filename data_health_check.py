@@ -513,6 +513,7 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
         self.all_logs = []
         self.chart_checkboxes = {}
         self.chart_statuses = {}
+        self.progress_dialog = None
         
         self.init_ui()
         self.apply_styles()
@@ -535,8 +536,8 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
 
     def init_ui(self):
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(30, 30, 30, 30)
-        layout.setSpacing(20)
+        layout.setContentsMargins(24, 22, 24, 24)
+        layout.setSpacing(16)
 
         # 1. 標題與路徑顯示
         header_layout = QtWidgets.QHBoxLayout()
@@ -561,21 +562,21 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
         btn_layout = QtWidgets.QHBoxLayout()
         
         self.btn_start = QtWidgets.QPushButton("▶ Start Check")
-        self.btn_start.setFixedSize(140, 40)
+        self.btn_start.setMinimumSize(140, 42)
         self.btn_start.clicked.connect(self.start_check)
         self.btn_start.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         
         # [新增] 開啟來源檔案按鈕
         self.btn_open_source = QtWidgets.QPushButton("📂 AllChartInfo Excel")
         self.btn_open_source.setObjectName("btnOpen")
-        self.btn_open_source.setFixedSize(200, 40)
+        self.btn_open_source.setMinimumSize(190, 42)
         self.btn_open_source.clicked.connect(self.open_source_file)
         self.btn_open_source.setEnabled(False) # 初始為禁用
         self.btn_open_source.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
 
         self.btn_export = QtWidgets.QPushButton("📁 Export Report")
         self.btn_export.setObjectName("btnExport")
-        self.btn_export.setFixedSize(180, 40)
+        self.btn_export.setMinimumSize(170, 42)
         self.btn_export.clicked.connect(self.export_report)
         self.btn_export.setEnabled(False)
         self.btn_export.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
@@ -594,15 +595,6 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
         layout.addLayout(btn_layout)
 
         # 3. 進度條
-        self.progress_bar = QtWidgets.QProgressBar()
-        self.progress_bar.setTextVisible(False)
-        self.progress_bar.setFixedHeight(8)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar { background-color: #E2E8F0; border-radius: 4px; border: none; }
-            QProgressBar::chunk { background-color: #344CB7; border-radius: 4px; }
-        """)
-        layout.addWidget(self.progress_bar)
-
         # 4. 儀表板卡片
         stats_layout = QtWidgets.QHBoxLayout()
         stats_layout.setSpacing(20)
@@ -959,7 +951,7 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
 
     def apply_styles(self):
         self.setStyleSheet("""
-            QWidget { font-family: 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans CJK TC', sans-serif; }
+            QWidget { font-family: 'Microsoft JhengHei', 'Yu Gothic UI', 'Malgun Gothic', 'Meiryo UI', 'PingFang TC', 'Noto Sans CJK TC', 'Noto Sans CJK JP', 'Noto Sans CJK KR', sans-serif; }
             #titleLabel { font-size: 26px; font-weight: 800; color: #1E293B; }
             
             QPushButton {
@@ -1021,6 +1013,18 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
                 text-align: left;
             }
         """)
+
+        from modern_ui import apply_modern_feature_page
+        apply_modern_feature_page(
+            self,
+            primary_buttons=(self.btn_start,),
+            secondary_buttons=(self.btn_export, self.scope_select_all, self.scope_clear),
+            success_buttons=(self.btn_open_source,),
+            cards=(self.card_total, self.card_pass, self.card_skip, self.card_unable, self.scope_card),
+            title_labels=(self.title_label,),
+            subtitle_labels=(self.path_label,),
+            clear_table_styles=(self.table,),
+        )
 
     def toggle_chart_scope(self, expanded):
         self.scope_scroll.setVisible(expanded)
@@ -1178,11 +1182,30 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
         self.worker.stats_updated.connect(self.update_stats)
         self.worker.log_added.connect(self.add_log_entry)
         self.worker.finished_check.connect(self.on_check_finished)
+
+        from modern_ui import ModernProgressDialog
+        self.progress_dialog = ModernProgressDialog(
+            tr("data_health_progress_title", "Data Health Check"),
+            tr("data_health_preparing", "Preparing data validation..."),
+            0,
+            0,
+            self,
+            cancelable=True,
+            cancel_text=tr("cancel", "Cancel"),
+            cancelling_text=tr("cancelling", "Cancelling..."),
+        )
+        self.progress_dialog.canceled.connect(self.worker.stop)
+        self.progress_dialog.show()
+        QtWidgets.QApplication.processEvents()
         self.worker.start()
 
     def update_progress(self, current, total):
-        self.progress_bar.setMaximum(total)
-        self.progress_bar.setValue(current)
+        if self.progress_dialog is not None:
+            self.progress_dialog.setRange(0, max(1, total))
+            self.progress_dialog.setValue(current)
+            self.progress_dialog.setLabelText(
+                f"{tr('checking', 'Checking')} {current} / {total}"
+            )
         self.lbl_val_total.setText(f"{current} / {total}")
 
     def update_stats(self, unable, warning, passed, skipped):
@@ -1378,7 +1401,12 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
         self.table.setRowHeight(row_index, 36)  # 稍微比按鈕高一點
 
     def on_check_finished(self, passed):
-        self.progress_bar.setValue(self.progress_bar.maximum())
+        if self.progress_dialog is not None:
+            self.progress_dialog.setLabelText(
+                tr("data_health_finalizing", "Organizing validation results...")
+            )
+            self.progress_dialog.setValue(self.progress_dialog.maximum())
+            QtWidgets.QApplication.processEvents()
         
         # [新增] 排序並顯示所有 logs
         self.display_sorted_logs()
@@ -1388,6 +1416,10 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
         self.btn_start.setEnabled(True)
         self.btn_export.setEnabled(True)
         self.btn_open_source.setEnabled(True)
+        if self.progress_dialog is not None:
+            self.progress_dialog.close()
+            self.progress_dialog.deleteLater()
+            self.progress_dialog = None
 
     def open_source_file(self):
         """開啟目前正在檢查的 Excel 檔案"""
@@ -1439,6 +1471,17 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
     def export_report(self):
         path, _ = QtWidgets.QFileDialog.getSaveFileName(self, tr("export_log", "Export Log"), "Data_Health_Log.xlsx", "Excel Files (*.xlsx)")
         if path:
+            from modern_ui import ModernProgressDialog
+            progress = ModernProgressDialog(
+                tr("export_progress", "Export Progress"),
+                tr("exporting_results", "Saving results to Excel..."),
+                0,
+                0,
+                self,
+            )
+            self.btn_export.setEnabled(False)
+            progress.show()
+            QtWidgets.QApplication.processEvents()
             try:
                 df = pd.DataFrame(self.all_logs)
                 df.to_excel(path, index=False)
@@ -1448,6 +1491,10 @@ class DataHealthCheckWidget(QtWidgets.QWidget):
                     tr("permission_denied_export", "⚠️ Permission denied: Cannot write to file\n\nThe file might be opened in Excel or another program.\nPlease close the file and try again.") + f"\n\nFile: {path}")
             except Exception as e:
                 QtWidgets.QMessageBox.critical(self, tr("export_failed", "Export Failed"), f"Failed to export: {e}")
+            finally:
+                progress.close()
+                progress.deleteLater()
+                self.btn_export.setEnabled(True)
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)

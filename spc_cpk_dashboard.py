@@ -184,6 +184,7 @@ def get_app_dir():
 class SPCCpkDashboard(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.parent_app = parent
         from translations import tr, TranslationManager
         self.setWindowTitle(tr('spc_cpk_dashboard'))
         self.resize(1200, 800)
@@ -205,6 +206,10 @@ class SPCCpkDashboard(QtWidgets.QWidget):
     def refresh_ui_texts(self):
         """刷新UI文字（當語言切換時）"""
         from translations import tr
+
+        if hasattr(self, 'page_title_label'):
+            self.page_title_label.setText(tr('spc_cpk_dashboard'))
+            self.page_subtitle_label.setText(tr('cpk_page_subtitle'))
         
         self.setWindowTitle(tr('spc_cpk_dashboard'))
         self.recalc_btn.setText("▶ " + tr('run_analysis'))
@@ -217,14 +222,16 @@ class SPCCpkDashboard(QtWidgets.QWidget):
         self.metric_cards['l1']['title_label'].setText(tr('l1_cpk'))
         self.metric_cards['l2']['title_label'].setText(tr('l2_cpk'))
         self.metric_cards['custom']['title_label'].setText(tr('long_term_cpk'))
-        self.metric_cards['r1']['title_label'].setText(tr('r1'))
-        self.metric_cards['r2']['title_label'].setText(tr('r2'))
+        self.metric_cards['r1']['title_label'].setText(f"{tr('r1')} (25%)")
+        self.metric_cards['r2']['title_label'].setText(f"{tr('r2')} (20%)")
         self.metric_cards['kval']['title_label'].setText(tr('k'))
         
         # 更新圖表標題和按鈕
         self.title_lbl.setText(tr('spc_chart'))
         self.prev_chart_btn.setText(tr('prev'))
         self.next_chart_btn.setText(tr('next'))
+        if self.chart_combo.count() == 0 or self.chart_combo.currentIndex() < 0:
+            self._draw_empty_chart()
     
     def open_settings_dialog(self):
         """打開設定對話框"""
@@ -253,10 +260,22 @@ class SPCCpkDashboard(QtWidgets.QWidget):
         from translations import tr
         
         root = QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(20, 16, 20, 16)
-        root.setSpacing(14)
+        root.setContentsMargins(24, 22, 24, 24)
+        root.setSpacing(16)
+
+        self.page_title_label = QtWidgets.QLabel(tr('spc_cpk_dashboard'))
+        self.page_subtitle_label = QtWidgets.QLabel(tr(
+            'cpk_page_subtitle',
+            'Review capability trends, limits, and recent-period comparisons in one place.'
+        ))
+        self.page_subtitle_label.setWordWrap(True)
+        root.addWidget(self.page_title_label)
+        root.addWidget(self.page_subtitle_label)
+
         # ===== Top Filter / Action Bar =====
-        top_bar = QtWidgets.QHBoxLayout()
+        self.toolbar_card = QtWidgets.QFrame()
+        top_bar = QtWidgets.QHBoxLayout(self.toolbar_card)
+        top_bar.setContentsMargins(16, 12, 16, 12)
         top_bar.setSpacing(12)
         self.chart_combo = QtWidgets.QComboBox()
         self.chart_combo.setMinimumWidth(280)
@@ -342,7 +361,7 @@ class SPCCpkDashboard(QtWidgets.QWidget):
         top_bar.addWidget(self.recalc_btn)
         top_bar.addWidget(self.export_excel_btn)
         top_bar.addStretch(1)
-        root.addLayout(top_bar)
+        root.addWidget(self.toolbar_card)
         # ===== Metric Cards Row =====
         self.metric_cards = {}
         cards_layout = QtWidgets.QGridLayout()
@@ -352,26 +371,14 @@ class SPCCpkDashboard(QtWidgets.QWidget):
             frame = QtWidgets.QFrame()
             frame.setObjectName("metricCard")
             frame.setProperty("status", "neutral")
-            pal = frame.palette()
-            pal.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor("#ffffff"))
-            frame.setAutoFillBackground(True)
-            frame.setPalette(pal)
             layout = QtWidgets.QVBoxLayout(frame)
             layout.setContentsMargins(16, 12, 16, 12)
             layout.setSpacing(4)
             title_label = QtWidgets.QLabel(title)
             title_label.setObjectName("metricTitle")
-            title_label.setAutoFillBackground(True)
-            tpal = title_label.palette()
-            tpal.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor("#ffffff"))
-            title_label.setPalette(tpal)
             value_label = QtWidgets.QLabel("-")
             value_label.setObjectName("metricValue")
             value_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
-            value_label.setAutoFillBackground(True)
-            vpal = value_label.palette()
-            vpal.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor("#ffffff"))
-            value_label.setPalette(vpal)
             layout.addWidget(title_label)
             layout.addWidget(value_label)
             layout.addStretch(1)
@@ -381,8 +388,8 @@ class SPCCpkDashboard(QtWidgets.QWidget):
         create_metric_card("l1", tr('l1_cpk'), 1)
         create_metric_card("l2", tr('l2_cpk'), 2)
         create_metric_card("custom", tr('long_term_cpk'), 3)
-        create_metric_card("r1", tr('r1'), 4)
-        create_metric_card("r2", tr('r2'), 5)
+        create_metric_card("r1", f"{tr('r1')} (25%)", 4)
+        create_metric_card("r2", f"{tr('r2')} (20%)", 5)
         create_metric_card("kval", tr('k'), 6)
         root.addLayout(cards_layout)
         # ===== Chart Area =====
@@ -454,6 +461,7 @@ class SPCCpkDashboard(QtWidgets.QWidget):
         self.figure = Figure(figsize=(8, 4))
         self.canvas = FigureCanvas(self.figure)
         chart_layout.addWidget(self.canvas, 1)
+        self._draw_empty_chart()
         root.addWidget(self.chart_frame, 1)
         # 事件連接
         self.recalc_btn.clicked.connect(self.recalculate)
@@ -472,11 +480,19 @@ class SPCCpkDashboard(QtWidgets.QWidget):
         
         # 創建進度對話框
         total_charts = len(self.all_charts_info)
-        progress = QtWidgets.QProgressDialog(tr('exporting_charts'), tr('cancel'), 0, total_charts, self)
-        progress.setWindowTitle(tr('export_progress'))
-        progress.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
+        from modern_ui import ModernProgressDialog
+        progress = ModernProgressDialog(
+            tr('export_progress'),
+            tr('exporting_charts'),
+            0,
+            total_charts,
+            self,
+            cancelable=True,
+            cancel_text=tr('cancel'),
+            cancelling_text=tr('cancelling', 'Cancelling...'),
+        )
         progress.setValue(0)
+        progress.show()
         
         rows = []
         chart_images = []
@@ -488,6 +504,8 @@ class SPCCpkDashboard(QtWidgets.QWidget):
             
             # 檢查使用者是否取消
             if progress.wasCanceled():
+                progress.close()
+                progress.deleteLater()
                 QtWidgets.QMessageBox.information(self, tr('export_cancelled'), tr('export_cancelled_msg'))
                 # 清理已產生的臨時圖片
                 for img_path in chart_images:
@@ -684,8 +702,9 @@ class SPCCpkDashboard(QtWidgets.QWidget):
                             if xr <= xl: continue
                             # 加入 linewidth=0 消除重疊處的深色條紋
                             ax.axvspan(xl, xr, color=col, alpha=0.25, zorder=0, linewidth=0)
-                            ax.text((xl + xr) / 2, 1.04, lab, transform=text_trans, ha='center', va='top', 
-                                    fontsize=9, color='#374151', alpha=0.9)
+                            ax.text((xl + xr) / 2, 1.015, lab, transform=text_trans,
+                                    ha='center', va='bottom', fontsize=9,
+                                    color='#374151', alpha=0.9, clip_on=False)
                             
                     except Exception as e:
                         print(f"[DEBUG] 底色繪製失敗: {e}")
@@ -783,6 +802,7 @@ class SPCCpkDashboard(QtWidgets.QWidget):
         # 完成進度
         progress.setValue(total_charts)
         progress.close()
+        progress.deleteLater()
         
         df = pd.DataFrame(rows)
         path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Download Chart Information Excel", "cpk_analysis_report.xlsx", "Excel Files (*.xlsx)")
@@ -853,6 +873,22 @@ class SPCCpkDashboard(QtWidgets.QWidget):
     # === 重新計算 ===
     def recalculate(self):
         print("[DEBUG] recalculate called")
+        from modern_ui import ModernProgressDialog
+        progress = ModernProgressDialog(
+            tr("cpk_analysis_progress_title", "CPK Analysis"),
+            tr("cpk_analysis_preparing", "Loading chart configuration..."),
+            0,
+            0,
+            self,
+        )
+        self.recalc_btn.setEnabled(False)
+        progress.show()
+        QtWidgets.QApplication.processEvents()
+
+        def finish_progress():
+            progress.close()
+            progress.deleteLater()
+            self.recalc_btn.setEnabled(True)
         
         # 1. 設定路徑
         chart_excel_path = os.path.join(get_app_dir(), 'input', 'All_Chart_Information.xlsx')
@@ -864,6 +900,7 @@ class SPCCpkDashboard(QtWidgets.QWidget):
             if hasattr(self.parent_app, 'filter_chart_information'):
                 self.all_charts_info = self.parent_app.filter_chart_information(self.all_charts_info)
             if self.all_charts_info is not None and self.all_charts_info.empty:
+                finish_progress()
                 QtWidgets.QMessageBox.warning(
                     self, tr('chart_scope', 'Analysis Scope'),
                     tr('no_charts_selected', 'No charts are selected. Select at least one chart in Data Health Monitor.'))
@@ -871,6 +908,7 @@ class SPCCpkDashboard(QtWidgets.QWidget):
             if self.all_charts_info is None:
                 raise ValueError("Excel 返回內容為空")
         except Exception as e:
+            finish_progress()
             QtWidgets.QMessageBox.critical(self, "Error", f"無法讀取 Chart 設定檔: {e}")
             return
 
@@ -888,11 +926,18 @@ class SPCCpkDashboard(QtWidgets.QWidget):
 
         # 5. 載入所有圖表的 raw data 並計算初始 Cpk
         raw_data_dir = os.path.join(get_app_dir(), 'input', 'raw_charts')
-        for _, chart_info in self.all_charts_info.iterrows():
+        total_charts = len(self.all_charts_info)
+        progress.setRange(0, max(1, total_charts))
+        for chart_index, (_, chart_info) in enumerate(self.all_charts_info.iterrows()):
             if not isinstance(chart_info, pd.Series):
                 continue
             group_name = str(chart_info['GroupName'])
             chart_name = str(chart_info['ChartName'])
+            progress.setValue(chart_index)
+            progress.setLabelText(
+                f"{tr('processing_chart')} {chart_index + 1}/{total_charts}: {group_name} / {chart_name}"
+            )
+            QtWidgets.QApplication.processEvents()
             raw_path = oob_module.find_matching_file(raw_data_dir, group_name, chart_name)
             if raw_path and os.path.exists(raw_path):
                 try:
@@ -933,11 +978,13 @@ class SPCCpkDashboard(QtWidgets.QWidget):
         if self.chart_combo.count() > 0:
             self.chart_combo.setCurrentIndex(0)
             self.update_cpk_labels()
+        progress.setValue(max(1, total_charts))
+        finish_progress()
 
     def apply_theme(self, mode: str = "light"):
         if mode == "light":
             self.setStyleSheet("""
-            QWidget { background:#eef1f5; color:#222; font-family:'Microsoft YaHei'; font-size:13px; }
+            QWidget { background:#eef1f5; color:#222; font-family:'Segoe UI','Microsoft JhengHei','Yu Gothic UI','Malgun Gothic','Meiryo UI',sans-serif; font-size:13px; }
             QComboBox, QDateEdit { background:#ffffff; border:1px solid #c5ccd4; padding:4px 8px; border-radius:7px; }
             QComboBox:hover, QDateEdit:hover { border:1px solid #98a3af; }
             QPushButton { background:#2563eb; color:#fff; border:none; padding:7px 18px; border-radius:8px; font-weight:600; }
@@ -966,9 +1013,56 @@ class SPCCpkDashboard(QtWidgets.QWidget):
             eff2.setColor(QtGui.QColor(0, 0, 0, 30))
             self.chart_frame.setGraphicsEffect(eff2)
 
+        from modern_ui import apply_modern_feature_page
+        apply_modern_feature_page(
+            self,
+            primary_buttons=(self.recalc_btn,),
+            secondary_buttons=(self.settings_btn, self.prev_chart_btn, self.next_chart_btn),
+            success_buttons=(self.export_excel_btn,),
+            cards=(
+                self.toolbar_card,
+                self.chart_frame,
+                *(meta["frame"] for meta in self.metric_cards.values()),
+            ),
+            title_labels=(self.page_title_label,),
+            subtitle_labels=(self.page_subtitle_label,),
+        )
+
     # ==== 重複定義刪除 (上方已有 recalculate) ====
 
     # (duplicate apply_theme & recalculate removed)
+
+    def _draw_empty_chart(self):
+        """Render a friendly initial state instead of an unexplained blank canvas."""
+        self.figure.clear()
+        self.figure.patch.set_facecolor("#FFFFFF")
+        ax = self.figure.add_subplot(111)
+        ax.set_facecolor("#FFFFFF")
+        ax.set_axis_off()
+        ax.text(
+            0.5,
+            0.54,
+            tr('cpk_empty_title', 'No chart selected'),
+            ha='center',
+            va='center',
+            fontsize=15,
+            fontweight='bold',
+            color='#172033',
+            transform=ax.transAxes,
+        )
+        ax.text(
+            0.5,
+            0.46,
+            tr('cpk_empty_desc', 'Select a chart above, then run the analysis to view its SPC trend.'),
+            ha='center',
+            va='center',
+            fontsize=10.5,
+            color='#667085',
+            transform=ax.transAxes,
+        )
+        self.figure.subplots_adjust(left=0.04, right=0.96, top=0.96, bottom=0.04)
+        if hasattr(self, 'canvas'):
+            self.canvas.draw_idle()
 
     def _apply_card_status(self, key: str, status: str):
         # 不再改變邊框顏色，保持固定樣式
@@ -982,10 +1076,7 @@ class SPCCpkDashboard(QtWidgets.QWidget):
         
         # idx=-1 或無效索引時不處理
         if idx < 0 or self.all_charts_info is None or idx >= len(self.all_charts_info):
-            self.figure.clear()
-            ax = self.figure.add_subplot(111)
-            ax.set_title("SPC Control Chart (Not Selected)")
-            self.canvas.draw()
+            self._draw_empty_chart()
             return
             
         # chart_combo 的索引直接對應 DataFrame 索引
@@ -1091,8 +1182,11 @@ class SPCCpkDashboard(QtWidgets.QWidget):
         chart_name = str(chart_info['ChartName'])
         
         # 定義卡片更新函數（放在開頭以避免未定義錯誤）
-        def set_card(key, value, is_percent=False):
+        def set_card(key, value, is_percent=False, is_alert=False):
             comp = self.metric_cards[key]
+            comp['value_label'].setStyleSheet(
+                "color: #DC2626;" if is_alert else ""
+            )
             if value is None:
                 comp['value_label'].setText('-')
             else:
@@ -1188,8 +1282,8 @@ class SPCCpkDashboard(QtWidgets.QWidget):
         if cpk is None or l1 is None or l2 is None:
             r2 = None
         
-        set_card('r1', r1, is_percent=True)
-        set_card('r2', r2, is_percent=True)
+        set_card('r1', r1, is_percent=True, is_alert=r1 is not None and r1 >= 25)
+        set_card('r2', r2, is_percent=True, is_alert=r2 is not None and r2 > 20)
         
         # 依目前設定重畫圖
         self.draw_spc_chart(group_name, chart_name, chart_info)
@@ -1326,8 +1420,9 @@ class SPCCpkDashboard(QtWidgets.QWidget):
                         if xr <= xl: continue
                         # 加入 linewidth=0 消除重疊處的深色條紋
                         ax.axvspan(xl, xr, color=col, alpha=0.25, zorder=0, linewidth=0)
-                        ax.text((xl + xr) / 2, 1.04, lab, transform=text_trans, ha='center', va='top', 
-                                fontsize=9, color='#374151', alpha=0.9)
+                        ax.text((xl + xr) / 2, 1.015, lab, transform=text_trans,
+                                ha='center', va='bottom', fontsize=9,
+                                color='#374151', alpha=0.9, clip_on=False)
                         
                 except Exception as e:
                     print(f"[DEBUG] 底色繪製失敗: {e}")

@@ -1,13 +1,42 @@
 ﻿import os
+import re
 import logging
 import pandas as pd
-from customer_filter import apply_customer_filter
 from PyQt6 import QtWidgets, QtCore, QtGui
 import pickle # Import pickle module for deep copying
 # Translation System
 from translations import get_translator, tr
 
 logger = logging.getLogger(__name__)
+
+
+def _find_raw_csv_for_chart(directory, group_name, chart_name):
+    """在 raw_data 目錄中尋找對應 GroupName/ChartName 的 CSV 檔案"""
+    group_name = str(group_name)
+    chart_name = str(chart_name)
+    pattern = re.compile(rf"{re.escape(group_name)}_{re.escape(chart_name)}(?:_\d+_\d+)?\.csv$")
+    try:
+        matches = [
+            os.path.join(directory, filename)
+            for filename in os.listdir(directory)
+            if pattern.match(filename)
+        ]
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    return matches[0] if matches else None
+
+
+def _normalize_characteristic_value(value):
+    """標準化 Characteristics 欄位（不分大小寫），預設為 Nominal"""
+    if pd.isna(value):
+        return 'Nominal'
+    mapping = {
+        'nominal': 'Nominal',
+        'bigger': 'Bigger',
+        'smaller': 'Smaller',
+        'sigma': 'Sigma'
+    }
+    return mapping.get(str(value).strip().lower(), 'Nominal')
 
 # Check if openpyxl package is installed
 try:
@@ -131,9 +160,9 @@ class FormulaExplanationDialog(QtWidgets.QDialog):
         notice_label_zh = QtWidgets.QLabel()
         notice_label_zh.setWordWrap(True)
         notice_label_zh.setTextFormat(QtCore.Qt.TextFormat.RichText)
-        notice_label_zh.setFont(QtGui.QFont("Microsoft JhengHei, sans-serif", 10))
+        notice_label_zh.setFont(QtGui.QFont("Segoe UI", 10))
         notice_html_zh = """
-<div style='background-color:#f5f5f5; padding:12px; border-radius:6px; font-size:13px; margin-bottom:15px; font-family:"Microsoft JhengHei", "PingFang TC", "Noto Sans CJK TC", sans-serif;'>
+<div style='background-color:#f5f5f5; padding:12px; border-radius:6px; font-size:13px; margin-bottom:15px; font-family:"Microsoft JhengHei", "Yu Gothic UI", "Malgun Gothic", "Meiryo UI", "PingFang TC", "Noto Sans CJK TC", "Noto Sans CJK JP", "Noto Sans CJK KR", sans-serif;'>
   <strong style='font-size:15px;'>⚠ 注意</strong>
   <p style='margin:8px 0;'>表格僅顯示需要關注的項目（異常檢測標準）：</p>
   <ul style='margin:8px 0 8px 20px; padding-left:0; line-height:1.8;'>
@@ -150,11 +179,11 @@ class FormulaExplanationDialog(QtWidgets.QDialog):
         formula_label_zh = QtWidgets.QLabel()
         formula_label_zh.setWordWrap(True)
         formula_label_zh.setTextFormat(QtCore.Qt.TextFormat.RichText)
-        formula_label_zh.setFont(QtGui.QFont("Microsoft JhengHei, sans-serif", 10))
+        formula_label_zh.setFont(QtGui.QFont("Segoe UI", 10))
         formula_html_zh = """
-<div style="background-color:#e8f4f8; padding:15px; border-radius:6px; font-size:13px; line-height:1.6; font-family:'Microsoft JhengHei', 'PingFang TC', 'Noto Sans CJK TC', sans-serif; border: 2px solid #344CB7;">
+<div style="background-color:#e8f4f8; padding:15px; border-radius:6px; font-size:13px; line-height:1.6; font-family:'Microsoft JhengHei', 'Yu Gothic UI', 'Malgun Gothic', 'Meiryo UI', 'PingFang TC', 'Noto Sans CJK TC', 'Noto Sans CJK JP', 'Noto Sans CJK KR', sans-serif; border: 2px solid #344CB7;">
   <strong style='font-size:15px;'>📘 計算公式</strong>
-  <table style="font-size:12px; margin-top:12px; font-family:'Microsoft JhengHei', 'PingFang TC', 'Noto Sans CJK TC', sans-serif; width:100%;">
+  <table style="font-size:12px; margin-top:12px; font-family:'Microsoft JhengHei', 'Yu Gothic UI', 'Malgun Gothic', 'Meiryo UI', 'PingFang TC', 'Noto Sans CJK TC', 'Noto Sans CJK JP', 'Noto Sans CJK KR', sans-serif; width:100%;">
     <tr>
       <td style="vertical-align:top; padding:8px; padding-right:12px; width:35%;"><strong>平均值匹配指數：</strong></td>
       <td style="padding:8px;">
@@ -408,7 +437,7 @@ class ToolMatchingWidget(QtWidgets.QWidget):
         self.translator.register_observer(self)
         # Set global font (CJK fallback: Microsoft JhengHei on Windows, system sans-serif elsewhere)
         font = QtGui.QFont()
-        font.setFamilies(["Microsoft JhengHei", "PingFang TC", "Noto Sans CJK TC", "sans-serif"])
+        font.setFamilies(["Microsoft JhengHei", "Yu Gothic UI", "Malgun Gothic", "Meiryo UI", "PingFang TC", "Noto Sans CJK TC", "Noto Sans CJK JP", "Noto Sans CJK KR", "sans-serif"])
         font.setPointSize(10)
         self.setFont(font)
         
@@ -423,27 +452,25 @@ class ToolMatchingWidget(QtWidgets.QWidget):
             'filter_mode': 0,
             'base_date': QtCore.QDate.currentDate()
         }
-        
+
         self.init_ui()
 
     def refresh_ui_texts(self):
         """刷新UI文字（當語言切換時）"""
         # 更新標題
         self.setWindowTitle(tr("tool_matching_title"))
-        self.title_label.setText(f"<h2 style='color:#34495E;'>{tr('tool_matching_title')}</h2>")
+        self.title_label.setText(tr("tool_matching_title"))
+        if hasattr(self, "subtitle_label"):
+            self.subtitle_label.setText(tr(
+                "tool_matching_subtitle",
+                "Analyze the existing All Chart and raw data; no file upload is required."
+            ))
         
         # 更新按鈕
-        self.file_btn.setText(tr("browse_files_with_icon"))
-        self.temp_btn.setText(tr("example_button"))
         self.settings_button.setText(f"⚙️ {tr('settings')}")
         self.formula_btn.setText(f"📊 {tr('formula_explanation')}")
         self.run_btn.setText(f"▶ {tr('run_analysis')}")
-        
-        # 更新輸入框 placeholder
-        self.file_path_entry.setPlaceholderText(tr("please_select_csv"))
-        
-        # 更新狀態標籤
-        self.status_label.setText(tr("select_file_prompt"))
+        self.export_btn.setText(tr("export_to_excel"))
         
         # 更新表格標題
         self.result_table.setHorizontalHeaderLabels([
@@ -461,48 +488,31 @@ class ToolMatchingWidget(QtWidgets.QWidget):
 
         # Main layout
         self.main_layout = QtWidgets.QVBoxLayout(self)
+        self.main_layout.setContentsMargins(24, 22, 24, 24)
+        self.main_layout.setSpacing(16)
         self.setLayout(self.main_layout)
 
         # --- Top Control Area ---
-        top_layout_widget = QtWidgets.QWidget()
+        top_layout_widget = QtWidgets.QFrame()
         top_layout = QtWidgets.QVBoxLayout(top_layout_widget)
+        top_layout.setContentsMargins(20, 16, 20, 16)
+        top_layout.setSpacing(10)
 
-        self.title_label = QtWidgets.QLabel(f"<h2 style='color:#34495E;'>{tr('tool_matching_title')}</h2>")
+        self.title_label = QtWidgets.QLabel(tr("tool_matching_title"))
         # Force apply CJK font to title
         title_font = QtGui.QFont()
-        title_font.setFamilies(["Microsoft JhengHei", "PingFang TC", "Noto Sans CJK TC", "sans-serif"])
+        title_font.setFamilies(["Microsoft JhengHei", "Yu Gothic UI", "Malgun Gothic", "Meiryo UI", "PingFang TC", "Noto Sans CJK TC", "Noto Sans CJK JP", "Noto Sans CJK KR", "sans-serif"])
         title_font.setPointSize(16)
         self.title_label.setFont(title_font)
         top_layout.addWidget(self.title_label)
 
-        file_layout = QtWidgets.QHBoxLayout()
-        self.file_path_entry = QtWidgets.QLineEdit()
-        self.file_path_entry.setPlaceholderText(tr("please_select_csv"))
-        self.file_path_entry.setReadOnly(True)
-        # 加入資料夾符號於「瀏覽檔案...」按鈕
-        self.file_btn = QtWidgets.QPushButton()
-        # 使用 emoji 📁 作為 icon，並將文字設為粗體，字體大小與執行按鈕一致
-        self.file_btn.setText(tr("browse_files_with_icon"))
-        self.file_btn.setIcon(QtGui.QIcon())  # 移除原本的 QStyle icon
-        btn_font = QtGui.QFont()
-        btn_font.setFamilies(["Microsoft JhengHei", "PingFang TC", "Noto Sans CJK TC", "sans-serif"])
-        btn_font.setBold(True)
-        btn_font.setPointSize(12)
-        self.file_btn.setFont(btn_font)
-        self.file_btn.setFixedWidth(180)
-        self.file_btn.clicked.connect(self.select_file)
-        file_layout.addWidget(self.file_path_entry)
-        file_layout.addWidget(self.file_btn)
+        self.subtitle_label = QtWidgets.QLabel(tr(
+            "tool_matching_subtitle",
+            "Analyze the existing All Chart and raw data; no file upload is required."
+        ))
+        self.subtitle_label.setWordWrap(True)
+        top_layout.addWidget(self.subtitle_label)
 
-        # 新增 temp 按鈕
-        self.temp_btn = QtWidgets.QPushButton(tr("example_button"))
-        self.temp_btn.setFont(btn_font)
-        self.temp_btn.setFixedWidth(140)
-        self.temp_btn.clicked.connect(self.generate_temp_csv)
-        file_layout.addWidget(self.temp_btn)
-        
-        top_layout.addLayout(file_layout)
-        
         # 按鈕區域 - 水平佈局
         button_layout = QtWidgets.QHBoxLayout()
         button_layout.setSpacing(10)
@@ -512,7 +522,7 @@ class ToolMatchingWidget(QtWidgets.QWidget):
         self.settings_button.setMinimumHeight(45)
         self.settings_button.setMinimumWidth(120)
         btn_font = QtGui.QFont()
-        btn_font.setFamilies(["Microsoft JhengHei", "PingFang TC", "Noto Sans CJK TC", "sans-serif"])
+        btn_font.setFamilies(["Microsoft JhengHei", "Yu Gothic UI", "Malgun Gothic", "Meiryo UI", "PingFang TC", "Noto Sans CJK TC", "Noto Sans CJK JP", "Noto Sans CJK KR", "sans-serif"])
         btn_font.setBold(True)
         btn_font.setPointSize(11)
         self.settings_button.setFont(btn_font)
@@ -586,14 +596,33 @@ class ToolMatchingWidget(QtWidgets.QWidget):
         """)
         self.run_btn.clicked.connect(self.run_analysis)
         button_layout.addWidget(self.run_btn)
+
+        # 分析與 Excel 匯出分開，避免產圖期間阻塞結果顯示。
+        self.export_btn = QtWidgets.QPushButton(tr("export_to_excel"))
+        self.export_btn.setFont(btn_font)
+        self.export_btn.setEnabled(False)
+        self.export_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2e7d32;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 10px 20px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #388e3c; }
+            QPushButton:pressed { background-color: #1b5e20; }
+            QPushButton:disabled { background-color: #cccccc; color: #666666; }
+        """)
+        self.export_btn.clicked.connect(self.export_results)
+        button_layout.addWidget(self.export_btn)
         
         button_layout.addStretch()
         top_layout.addLayout(button_layout)
 
-        # 狀態標籤
-        self.status_label = QtWidgets.QLabel(tr("select_file_prompt"))
-        self.status_label.setFont(QtGui.QFont("Microsoft JhengHei, PingFang TC, Noto Sans CJK TC, sans-serif", 10))
-        top_layout.addWidget(self.status_label)
+        # 保留狀態物件供分析流程更新，但不在畫面上顯示提示橫幅。
+        self.status_label = QtWidgets.QLabel()
+        self.status_label.hide()
 
         self.main_layout.addWidget(top_layout_widget)
 
@@ -630,6 +659,19 @@ class ToolMatchingWidget(QtWidgets.QWidget):
             }
         """)
         self.main_layout.addWidget(self.result_table, 1) # 表格佔用更多空間
+
+        from modern_ui import apply_modern_feature_page
+        apply_modern_feature_page(
+            self,
+            primary_buttons=(self.run_btn,),
+            secondary_buttons=(self.settings_button, self.formula_btn),
+            success_buttons=(self.export_btn,),
+            cards=(top_layout_widget,),
+            title_labels=(self.title_label,),
+            subtitle_labels=(self.subtitle_label,),
+            status_labels=(self.status_label,),
+            clear_table_styles=(self.result_table,),
+        )
     def open_tool_matching_settings(self):
         """打開 Tool Matching 設定對話框"""
         dialog = ToolMatchingSettingsDialog(self)
@@ -649,39 +691,77 @@ class ToolMatchingWidget(QtWidgets.QWidget):
         dialog = FormulaExplanationDialog(self)
         dialog.exec()
     
-    def generate_temp_csv(self):
-        # 預設範例資料
-        data = {
-            "GroupName": ["GroupA"],
-            "ChartName": ["X"],
-            "point_time": ["2023/5/15 14:39"],
-            "matching_group": ["A"],
-            "point_val": [99.88135943],
-            "characteristic": ["Nominal"]
-        }
-        df = pd.DataFrame(data)
-        # 彈出儲存檔案對話框
-        save_path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self,
-            "Save Example CSV File",
-            "tool_matching_input_example.csv",
-            "CSV Files (*.csv);;All Files (*.*)"
-        )
-        if not save_path:
-            self.status_label.setText("Cancelled saving example file.")
-            return
-        try:
-            df.to_csv(save_path, index=False, encoding="utf-8-sig")
-            self.status_label.setText(f"Example CSV saved to: {save_path}")
-        except Exception as e:
-            self.status_label.setText(f"Example CSV generation failed: {e}")
-    def select_file(self):
-        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Select CSV File", "", "CSV Files (*.csv);;All Files (*.*)"
-        )
-        if file_path:
-            self.file_path_entry.setText(file_path)
-            self.status_label.setText(f"Selected file: {os.path.basename(file_path)}")
+    def build_dataframe_from_app_data(self):
+        """
+        直接使用主程式已載入的 All_Chart_Information + rawdata 組出分析用的 DataFrame，
+        不需要另外匯入 CSV。rawdata 的 Matching（相容舊資料的 Tool）欄位會作為 matching_group。
+        """
+        parent = self.parent_app
+        chart_excel_path = getattr(parent, 'filepath', None) if parent is not None else None
+        raw_data_dir = getattr(parent, 'raw_data_directory', None) if parent is not None else None
+
+        if not chart_excel_path or not os.path.exists(chart_excel_path):
+            raise FileNotFoundError("找不到 All_Chart_Information.xlsx，請先在主程式載入圖表資訊。")
+        if not raw_data_dir or not os.path.isdir(raw_data_dir):
+            raise FileNotFoundError("找不到 rawdata 目錄，請先在主程式設定原始數據路徑。")
+
+        chart_info = pd.read_excel(chart_excel_path, sheet_name='Chart', engine='openpyxl')
+        required_cols = ['GroupName', 'ChartName', 'Characteristics']
+        missing = [c for c in required_cols if c not in chart_info.columns]
+        if missing:
+            raise ValueError(f"All_Chart_Information 缺少必要欄位: {missing}")
+
+        # 若主程式有客戶/圖表篩選範圍，套用相同篩選以維持一致性
+        if hasattr(parent, 'filter_chart_information'):
+            try:
+                chart_info = parent.filter_chart_information(chart_info)
+            except Exception as e:
+                logger.warning(f"filter_chart_information 套用失敗，改用全部圖表: {e}")
+
+        frames = []
+        skipped = []
+        for _, row in chart_info.iterrows():
+            group_name = str(row['GroupName'])
+            chart_name = str(row['ChartName'])
+            csv_path = _find_raw_csv_for_chart(raw_data_dir, group_name, chart_name)
+            if not csv_path:
+                skipped.append(f"{group_name}/{chart_name}（找不到原始檔）")
+                continue
+            try:
+                raw_df = pd.read_csv(csv_path)
+            except Exception as e:
+                skipped.append(f"{group_name}/{chart_name}（讀取失敗: {e}）")
+                continue
+
+            matching_col = next((col for col in ('Matching', 'Tool') if col in raw_df.columns), None)
+            if matching_col is None:
+                skipped.append(f"{group_name}/{chart_name}（缺少 Matching/Tool 欄位）")
+                continue
+            if 'point_val' not in raw_df.columns or 'point_time' not in raw_df.columns:
+                skipped.append(f"{group_name}/{chart_name}（缺少 point_val/point_time 欄位）")
+                continue
+
+            if hasattr(parent, 'filter_customer_data'):
+                customer_result = parent.filter_customer_data(raw_df, os.path.basename(csv_path))
+                if customer_result.missing_column or customer_result.data.empty:
+                    continue
+                raw_df = customer_result.data
+
+            sub_df = pd.DataFrame({
+                'GroupName': group_name,
+                'ChartName': chart_name,
+                'point_time': raw_df['point_time'],
+                'matching_group': raw_df[matching_col].astype(str),
+                'point_val': raw_df['point_val'],
+                'characteristic': _normalize_characteristic_value(row.get('Characteristics'))
+            })
+            frames.append(sub_df)
+
+        if not frames:
+            raise ValueError("沒有可用的資料，請確認 rawdata 中是否包含 Matching 欄位。")
+
+        combined_df = pd.concat(frames, ignore_index=True)
+        return combined_df, skipped
 
     def get_k_value(self, n):
         """根據樣本數量 n 返回 K 值"""
@@ -706,41 +786,71 @@ class ToolMatchingWidget(QtWidgets.QWidget):
         else:  # Nominal
             return abs(mean1 - mean2) / min_sigma
 
-    def run_analysis(self):
-        file_path = self.file_path_entry.text()
-        if not file_path or not os.path.exists(file_path):
-            self.status_label.setText("Please select a valid CSV file first!")
-            return
-
+    def _load_input_dataframe(self):
+        """每次執行時直接從主程式目前的 All Chart 與 rawdata CSV 取得資料。"""
         try:
-            df = pd.read_csv(file_path)
-            if hasattr(self.parent_app, 'filter_customer_data'):
-                customer_result = self.parent_app.filter_customer_data(df, os.path.basename(file_path))
-            else:
-                customer_result = apply_customer_filter(df, set())
-            if customer_result.missing_column:
-                self.status_label.setText("Customer filter active, but the CSV has no Customer column.")
-                return
-            if customer_result.data.empty:
-                self.status_label.setText("No data for the selected Customer(s).")
-                return
-            df = customer_result.data
+            df, skipped = self.build_dataframe_from_app_data()
         except Exception as e:
-            self.status_label.setText(f"Failed to read file: {e}")
-            return
+            self.status_label.setText(f"無法載入專案資料：{e}")
+            return None
+
+        n_charts = df.groupby(['GroupName', 'ChartName']).ngroups
+        self.status_label.setText(
+            f"已載入 {n_charts} 張圖表、{len(df)} 筆資料；略過 {len(skipped)} 張圖表。"
+        )
 
         # 檢查必要欄位
         required_cols = ["GroupName", "ChartName", "matching_group", "point_val", "characteristic", "point_time"]
         for col in required_cols:
             if col not in df.columns:
                 self.status_label.setText(f"Missing required column: {col}")
-                return
+                return None
 
         # 轉換 point_time 為 datetime
         try:
             df["point_time"] = pd.to_datetime(df["point_time"])
         except Exception as e:
             self.status_label.setText(f"point_time column conversion failed: {e}")
+            return None
+
+        return df
+
+    def run_analysis(self):
+        """以彈出式進度條包裝同步分析，確保完成或失敗時都會關閉。"""
+        from modern_ui import ModernProgressDialog
+        progress = ModernProgressDialog(
+            tr("tool_matching_title"),
+            tr("tool_matching_loading", "Loading All Chart and raw data..."),
+            0,
+            0,
+            self,
+        )
+        progress.show()
+        QtWidgets.QApplication.processEvents()
+        try:
+            self._run_analysis(progress)
+        except Exception as e:
+            logger.exception("Tool Matching 分析失敗")
+            self.status_label.setText(f"分析失敗：{e}")
+            QtWidgets.QMessageBox.critical(self, tr("tool_matching_title"), f"分析失敗：{e}")
+        finally:
+            progress.close()
+            progress.deleteLater()
+
+    def _update_analysis_progress(self, progress, current, total, group_name, chart_name):
+        progress.setRange(0, total + 1)
+        progress.setValue(current)
+        progress.setLabelText(
+            f"正在分析圖表 {current + 1}/{total}：{group_name} / {chart_name}"
+        )
+        QtWidgets.QApplication.processEvents()
+
+    def _run_analysis(self, progress):
+        # 新分析開始後，舊結果不可再匯出。
+        self.last_export_rows = []
+        self.export_btn.setEnabled(False)
+        df = self._load_input_dataframe()
+        if df is None:
             return
 
         # 從設定字典獲取參數
@@ -755,10 +865,12 @@ class ToolMatchingWidget(QtWidgets.QWidget):
         if filter_mode == 0:
             # 全算
             grouped = df.groupby(["GroupName", "ChartName"])
+            total_charts = grouped.ngroups
             print("\n[DEBUG] All unique (GroupName, ChartName) pairs:")
             for pair in grouped.groups.keys():
                 print("  ", pair)
-            for (gname, cname), subdf in grouped:
+            for chart_index, ((gname, cname), subdf) in enumerate(grouped):
+                self._update_analysis_progress(progress, chart_index, total_charts, gname, cname)
                 print(f"[DEBUG] Now processing group: GroupName='{gname}', ChartName='{cname}' | subdf.shape={subdf.shape}")
                 characteristic = subdf["characteristic"].dropna().unique()
                 if len(characteristic) != 1:
@@ -770,16 +882,22 @@ class ToolMatchingWidget(QtWidgets.QWidget):
                     self._analyze_two_groups(group_stats, gname, cname, characteristic[0], results)
                 else:
                     self._analyze_multiple_groups(subdf, group_stats, gname, cname, characteristic[0], results)
+            progress.setValue(total_charts)
+            progress.setLabelText("正在建立分析圖表...")
+            QtWidgets.QApplication.processEvents()
             self._create_boxplots(grouped)
+            progress.setValue(total_charts + 1)
         elif filter_mode == 1:
             # 指定日期模式
             grouped = df.groupby(["GroupName", "ChartName"])
+            total_charts = grouped.ngroups
             print("\n[DEBUG] All unique (GroupName, ChartName) pairs:")
             for pair in grouped.groups.keys():
                 print("  ", pair)
             sigma_df_all = []  # 收集所有半年資料
             mean_df_all = []   # 收集所有一個月(補到5筆)資料
-            for (gname, cname), subdf in grouped:
+            for chart_index, ((gname, cname), subdf) in enumerate(grouped):
+                self._update_analysis_progress(progress, chart_index, total_charts, gname, cname)
                 print(f"[DEBUG] Now processing group: GroupName='{gname}', ChartName='{cname}' | subdf.shape={subdf.shape}")
                 characteristic = subdf["characteristic"].dropna().unique()
                 if len(characteristic) != 1:
@@ -825,18 +943,24 @@ class ToolMatchingWidget(QtWidgets.QWidget):
                     self._analyze_two_groups(group_stats, gname, cname, characteristic[0], results)
                 else:
                     self._analyze_multiple_groups_time(mean_df, sigma_df, group_stats, gname, cname, characteristic[0], results)
+            progress.setValue(total_charts)
+            progress.setLabelText("正在建立分析圖表...")
+            QtWidgets.QApplication.processEvents()
             if mean_df_all:
                 mean_df_concat = pd.concat(mean_df_all, ignore_index=True)
                 mean_grouped = mean_df_concat.groupby(["GroupName", "ChartName"])
                 self._create_boxplots(mean_grouped)
             else:
                 self._create_boxplots(grouped)
+            progress.setValue(total_charts + 1)
         elif filter_mode == 2:
             # 最新進點模式
             grouped = df.groupby(["GroupName", "ChartName"])
+            total_charts = grouped.ngroups
             sigma_df_all = []
             mean_df_all = []
-            for (gname, cname), subdf in grouped:
+            for chart_index, ((gname, cname), subdf) in enumerate(grouped):
+                self._update_analysis_progress(progress, chart_index, total_charts, gname, cname)
                 characteristic = subdf["characteristic"].dropna().unique()
                 if len(characteristic) != 1:
                     self.status_label.setText(f"Group: {gname}-{cname}  has non-unique or missing characteristic")
@@ -878,13 +1002,19 @@ class ToolMatchingWidget(QtWidgets.QWidget):
                     self._analyze_two_groups(group_stats, gname, cname, characteristic[0], results)
                 else:
                     self._analyze_multiple_groups_time(mean_df, sigma_df, group_stats, gname, cname, characteristic[0], results)
+            progress.setValue(total_charts)
+            progress.setLabelText("正在建立分析圖表...")
+            QtWidgets.QApplication.processEvents()
             if mean_df_all:
                 mean_df_concat = pd.concat(mean_df_all, ignore_index=True)
                 mean_grouped = mean_df_concat.groupby(["GroupName", "ChartName"])
                 self._create_boxplots(mean_grouped)
             else:
                 self._create_boxplots(grouped)
+            progress.setValue(total_charts + 1)
 
+        progress.setLabelText("正在整理分析結果...")
+        QtWidgets.QApplication.processEvents()
         self._display_results(results)
 
     def _analyze_multiple_groups_time(self, mean_df, sigma_df, group_stats, gname, cname, characteristic, results):
@@ -1246,7 +1376,7 @@ class ToolMatchingWidget(QtWidgets.QWidget):
                     except (ValueError, TypeError):
                         pass
                 else:
-                    abnormal_type = ""
+                    abnormal_type = "Insufficient Data"
                 
                 # 樣本數 n 強制轉為 int 顯示
                 samplesize_val = stats.get("samplesize", "")
@@ -1263,7 +1393,8 @@ class ToolMatchingWidget(QtWidgets.QWidget):
                     samplesize_val, stats.get("characteristic", "")
                 ]
                 
-                all_row_data = [is_abnormal, abnormal_type] + row_data
+                needs_attention = is_abnormal or is_data_insufficient
+                all_row_data = [needs_attention, abnormal_type] + row_data
                 all_table_rows.append(all_row_data)
                 
                 if is_abnormal or is_data_insufficient:
@@ -1277,29 +1408,24 @@ class ToolMatchingWidget(QtWidgets.QWidget):
         # 填充表格 (只顯示異常項目)
         self.result_table.setColumnCount(14)
         self.result_table.setHorizontalHeaderLabels([
-            "View Details", "Abnormal Type", "Group Name", "Chart Name", "Matching Group", "Mean Index", "Sigma Index",
+            "View", "Abnormal Type", "Group Name", "Chart Name", "Matching Group", "Mean Index", "Sigma Index",
             "K", "Mean", "Sigma", "Mean Median", "Sigma Median", "Sample Size", "Characteristic"
         ])
         self.result_table.setRowCount(len(abnormal_ui_rows))
 
+        view_details_icon = self._create_view_details_icon()
 
         for i, item_info in enumerate(abnormal_ui_rows):
-            # 使用眼睛 icon 按鈕
             view_button = QtWidgets.QPushButton()
-            eye_icon = self.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_DesktopIcon)  # fallback 預設 icon
-            # 嘗試用 PyQt6 內建的 eye icon，如果有
-            try:
-                eye_icon = self.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_FileDialogContentsView)
-            except Exception:
-                pass
-            view_button.setIcon(eye_icon)
+            view_button.setIcon(view_details_icon)
             view_button.setToolTip("檢視詳細資訊")
-            view_button.setFixedWidth(36)
-            view_button.setFixedHeight(36)
-            view_button.setIconSize(QtCore.QSize(22, 22))
+            view_button.setFixedSize(28, 28)
+            view_button.setIconSize(QtCore.QSize(20, 20))
             view_button.setStyleSheet("QPushButton { border: none; background: transparent; } QPushButton:hover { background: #e0e7ef; }")
             # 置中顯示
             cell_widget = QtWidgets.QWidget()
+            cell_widget.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
+            cell_widget.setStyleSheet("background: transparent;")
             layout = QtWidgets.QHBoxLayout(cell_widget)
             layout.setContentsMargins(0, 0, 0, 0)
             layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
@@ -1308,6 +1434,7 @@ class ToolMatchingWidget(QtWidgets.QWidget):
                 lambda checked, key=item_info["key"], gid=item_info["group_id"]: self._show_details_dialog(key, gid)
             )
             self.result_table.setCellWidget(i, 0, cell_widget)
+            self.result_table.setRowHeight(i, 44)
 
             # Fill other data (with additional abnormal type column)
             row_data = item_info["data"]
@@ -1337,19 +1464,105 @@ class ToolMatchingWidget(QtWidgets.QWidget):
                     item.setForeground(QtGui.QColor("#D32F2F"))
                 self.result_table.setItem(i, j + 1, item)
 
-        self.result_table.resizeColumnsToContents()
-        self.result_table.horizontalHeader().setStretchLastSection(True)
+        # Keep compact metric columns and give the chart name the flexible space.
+        # This prevents the rightmost columns from being pushed off-screen.
+        result_header = self.result_table.horizontalHeader()
+        result_header.setStretchLastSection(False)
+        result_widths = {
+            0: 56,   # View
+            1: 105,  # Abnormal Type
+            2: 100,  # Group Name
+            4: 112,  # Matching Group
+            5: 84,   # Mean Index
+            6: 84,   # Sigma Index
+            7: 48,   # K
+            8: 65,   # Mean
+            9: 65,   # Sigma
+            10: 95,  # Mean Median
+            11: 95,  # Sigma Median
+            12: 80,  # Sample Size
+            13: 100, # Characteristic
+        }
+        for column, width in result_widths.items():
+            result_header.setSectionResizeMode(
+                column, QtWidgets.QHeaderView.ResizeMode.Fixed
+            )
+            self.result_table.setColumnWidth(column, width)
+        result_header.setSectionResizeMode(
+            3, QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
 
-        # 匯出全部結果到 Excel 檔案
-        if all_table_rows and hasattr(self, 'file_path_entry') and self.file_path_entry.text():
-            self._export_to_excel(all_table_rows, self.file_path_entry.text())
-        else:
-            self.status_label.setText(f"Analysis completed, found {len(abnormal_ui_rows)} items requiring attention.")
+        # Excel 只匯出畫面定義的問題項目：指標異常或資料不足。
+        self.last_export_rows = [row for row in all_table_rows if row[0]]
+        self.export_btn.setEnabled(bool(self.last_export_rows))
             
         if len(abnormal_ui_rows) > 0:
             self.status_label.setText(f"Analysis completed, found {len(abnormal_ui_rows)} items requiring attention (total {len(all_table_rows)} items).")
         else:
             self.status_label.setText(f"Analysis completed, no items requiring attention found (total {len(all_table_rows)} items).")
+
+    @staticmethod
+    def _create_view_details_icon():
+        """Create a small, platform-independent eye icon for the details column."""
+        pixmap = QtGui.QPixmap(20, 20)
+        pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+        painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setPen(QtGui.QPen(QtGui.QColor("#334155"), 1.8))
+        painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+
+        eye = QtGui.QPainterPath()
+        eye.moveTo(2.0, 10.0)
+        eye.cubicTo(5.0, 4.5, 15.0, 4.5, 18.0, 10.0)
+        eye.cubicTo(15.0, 15.5, 5.0, 15.5, 2.0, 10.0)
+        eye.closeSubpath()
+        painter.drawPath(eye)
+        painter.setBrush(QtGui.QColor("#334155"))
+        painter.drawEllipse(QtCore.QRectF(7.0, 7.0, 6.0, 6.0))
+        painter.end()
+        return QtGui.QIcon(pixmap)
+
+    def export_results(self):
+        """使用最近一次分析結果匯出 Excel，不重新執行統計分析。"""
+        all_table_rows = getattr(self, 'last_export_rows', None)
+        source_path = getattr(self.parent_app, 'filepath', None)
+        if not all_table_rows:
+            self.status_label.setText("沒有可匯出的分析結果，請先執行分析。")
+            return
+
+        source_name = (
+            os.path.splitext(os.path.basename(source_path))[0]
+            if source_path else "Tool_Matching"
+        )
+        output_path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            tr("export_to_excel"),
+            f"{source_name}_matching_results.xlsx",
+            "Excel Files (*.xlsx);;All Files (*)",
+        )
+        if not output_path:
+            return
+        if not output_path.lower().endswith(".xlsx"):
+            output_path += ".xlsx"
+
+        self.export_btn.setEnabled(False)
+        self.status_label.setText("正在匯出 Excel；每張 Chart 僅嵌入一組圖表...")
+        from modern_ui import ModernProgressDialog
+        progress = ModernProgressDialog(
+            tr("export_to_excel"),
+            tr("export_preparing", "Preparing Excel..."),
+            0,
+            len(all_table_rows),
+            self,
+        )
+        progress.show()
+        QtWidgets.QApplication.processEvents()
+        try:
+            self._export_to_excel(all_table_rows, output_path, progress)
+        finally:
+            progress.close()
+            progress.deleteLater()
+            self.export_btn.setEnabled(True)
 
     def _show_details_dialog(self, chart_key, group_id):
         """Pop up a window to display detailed information and charts, with data at the top and charts at the bottom."""
@@ -1361,7 +1574,14 @@ class ToolMatchingWidget(QtWidgets.QWidget):
 
         dialog = QtWidgets.QDialog(self)
         dialog.setWindowTitle(f"Detailed Information: {chart_key[0]} - {chart_key[1]} | Group: {group_id}")
-        dialog.setMinimumSize(1400, 450) # 調整視窗大小以適應新佈局 (高度減少)
+        dialog.setMinimumSize(1180, 620)
+        screen = QtWidgets.QApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            dialog.resize(
+                min(1540, int(available.width() * 0.94)),
+                min(820, int(available.height() * 0.90)),
+            )
 
         main_layout = QtWidgets.QVBoxLayout(dialog)
         main_layout.setSpacing(10)
@@ -1427,6 +1647,12 @@ class ToolMatchingWidget(QtWidgets.QWidget):
         info_table.setRowCount(1)
         info_table.verticalHeader().setVisible(False)
         info_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        info_table.setVerticalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        info_table.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
 
         for j, value in enumerate(row_values):
             if j in [4,5,6,7,8,9,10]:  # Mean Index, Sigma Index, K, Mean, Sigma, Mean Median, Sigma Median
@@ -1440,14 +1666,28 @@ class ToolMatchingWidget(QtWidgets.QWidget):
             item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             info_table.setItem(0, j, item)
 
-        info_table.resizeColumnsToContents()
-        info_table.setFixedHeight(info_table.horizontalHeader().height() + info_table.rowHeight(0) + 5)
+        info_header = info_table.horizontalHeader()
+        info_header.setStretchLastSection(False)
+        info_widths = {
+            0: 108, 1: 105, 3: 118, 4: 88, 5: 88, 6: 48,
+            7: 68, 8: 68, 9: 100, 10: 100, 11: 88, 12: 108,
+        }
+        for column, width in info_widths.items():
+            info_header.setSectionResizeMode(
+                column, QtWidgets.QHeaderView.ResizeMode.Fixed
+            )
+            info_table.setColumnWidth(column, width)
+        info_header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        info_table.setRowHeight(0, 38)
+        info_table.setFixedHeight(info_header.height() + info_table.rowHeight(0) + 16)
         info_v_layout.addWidget(info_table)
+        info_group.setMinimumHeight(150)
+        info_group.setMaximumHeight(168)
         main_layout.addWidget(info_group)
 
         # --- 下方：圖表區塊 ---
-        charts_container_widget = QtWidgets.QWidget()
-        charts_layout = QtWidgets.QHBoxLayout(charts_container_widget)
+        charts_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        charts_splitter.setChildrenCollapsible(False)
 
         if hasattr(self, 'chart_figures') and chart_key in self.chart_figures:
             figures = self.chart_figures[chart_key]
@@ -1465,18 +1705,21 @@ class ToolMatchingWidget(QtWidgets.QWidget):
                 scatter_canvas.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
                 box_canvas.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
 
-                charts_layout.addWidget(scatter_canvas)
-                charts_layout.addWidget(box_canvas)
+                charts_splitter.addWidget(scatter_canvas)
+                charts_splitter.addWidget(box_canvas)
+                charts_splitter.setStretchFactor(0, 1)
+                charts_splitter.setStretchFactor(1, 1)
+                charts_splitter.setSizes([1, 1])
             else:
-                charts_layout.addWidget(QtWidgets.QLabel("Charts for this item were not generated due to insufficient data."))
+                charts_splitter.addWidget(QtWidgets.QLabel("Charts for this item were not generated due to insufficient data."))
         else:
-            charts_layout.addWidget(QtWidgets.QLabel("Cannot find corresponding charts."))
+            charts_splitter.addWidget(QtWidgets.QLabel("Cannot find corresponding charts."))
         
-        main_layout.addWidget(charts_container_widget)
+        main_layout.addWidget(charts_splitter, 1)
 
         # 設定佈局伸展因子，讓圖表區域佔用更多空間
         main_layout.setStretchFactor(info_group, 0) # 數據表格高度固定
-        main_layout.setStretchFactor(charts_container_widget, 1) # 圖表區域填滿剩餘空間
+        main_layout.setStretchFactor(charts_splitter, 1) # 圖表區域填滿剩餘空間
 
         # --- 關閉按鈕 ---
         button_box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close)
@@ -1605,7 +1848,7 @@ class ToolMatchingWidget(QtWidgets.QWidget):
             plt.close(scatter_fig)
             plt.close(box_fig)
 
-    def _export_to_excel(self, all_results, source_path):
+    def _export_to_excel(self, all_results, output_path, progress=None):
         """將分析結果匯出為 Excel 檔案，並在第一欄嵌入完整的盒鬚圖和散點圖。包含異常類型欄。"""
         try:
             # 檢查是否已安裝 openpyxl
@@ -1644,11 +1887,6 @@ class ToolMatchingWidget(QtWidgets.QWidget):
             print(f"DataFrame info: {df.shape}")
             print(f"DataFrame columns: {df.columns.tolist()}")
             print(f"First row: {df.iloc[0].tolist() if len(df) > 0 else 'No data'}")
-
-            # 生成輸出檔案路徑（與輸入檔案相同目錄）
-            dir_path = os.path.dirname(source_path)
-            file_name = os.path.splitext(os.path.basename(source_path))[0]
-            output_path = os.path.join(dir_path, f"{file_name}_matching_results.xlsx")
 
             # 創建臨時目錄用於保存圖片
             import tempfile
@@ -1693,9 +1931,20 @@ class ToolMatchingWidget(QtWidgets.QWidget):
             if not has_chart_figures:
                 print("[WARNING] 沒有可用的圖表數據，將使用簡單的狀態指示圖")
 
+            # 同一 Chart 的各 Matching 列共用圖表；只在第一次出現時嵌入。
+            embedded_chart_rows = {}
+            image_rows = set()
+
             # 從第二行開始遍歷（跳過標題行）
             for row_idx, row in enumerate(df.iterrows(), start=2):
                 _, row_data = row
+                if progress is not None:
+                    progress.setValue(row_idx - 2)
+                    progress.setLabelText(
+                        f"正在匯出問題項目 {row_idx - 1}/{len(df)}："
+                        f"{row_data['GroupName']} / {row_data['ChartName']}"
+                    )
+                    QtWidgets.QApplication.processEvents()
 
                 # 檢查Need_matching欄位是否為True
                 is_abnormal = row_data["Need_matching"]
@@ -1720,6 +1969,14 @@ class ToolMatchingWidget(QtWidgets.QWidget):
 
                     # 嘗試使用完整的SPC圖和盒鬚圖
                     chart_key = (group_name, chart_name)
+                    if chart_key in embedded_chart_rows:
+                        first_row = embedded_chart_rows[chart_key]
+                        worksheet.cell(row=row_idx, column=1).value = f"同 Chart 圖表請參考第 {first_row} 列"
+                        worksheet.cell(row=row_idx, column=2).value = f"同 Chart 圖表請參考第 {first_row} 列"
+                        continue
+
+                    embedded_chart_rows[chart_key] = row_idx
+                    image_rows.add(row_idx)
                     if has_chart_figures and chart_key in self.chart_figures:
                         # 存在完整的分析圖表，使用實際的SPC圖和盒鬚圖
                         chart_data = self.chart_figures[chart_key]
@@ -1832,7 +2089,7 @@ class ToolMatchingWidget(QtWidgets.QWidget):
 
             # 調整行高以適應圖表
             for i in range(2, worksheet.max_row + 1):
-                worksheet.row_dimensions[i].height = 190
+                worksheet.row_dimensions[i].height = 190 if i in image_rows else 30
 
             # 調整其他列寬
             for col_idx, column in enumerate(worksheet.columns, start=1):
@@ -1851,6 +2108,10 @@ class ToolMatchingWidget(QtWidgets.QWidget):
 
             # 儲存 Excel 檔案
             try:
+                if progress is not None:
+                    progress.setValue(len(df))
+                    progress.setLabelText("正在儲存 Excel 檔案...")
+                    QtWidgets.QApplication.processEvents()
                 writer.close()
                 print(f"[INFO] Excel 檔案已儲存到: {output_path}")
             except Exception as save_e:
