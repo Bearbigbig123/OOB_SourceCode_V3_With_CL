@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib import font_manager
 from datetime import datetime, timedelta
 import traceback
 # CL Tighten Calculator
@@ -37,6 +38,46 @@ plt.rcParams['font.sans-serif'] = [
     'SimHei', 'Arial Unicode MS'
 ]
 plt.rcParams['axes.unicode_minus'] = False  # 正確顯示負號
+
+_MATPLOTLIB_FONT_CACHE = {}
+_MATPLOTLIB_FONT_FAMILIES = {
+    'ZH_TW': ['Microsoft JhengHei', 'Noto Sans CJK TC', 'Arial Unicode MS'],
+    'KO': ['Malgun Gothic', 'Noto Sans CJK KR', 'Arial Unicode MS'],
+    'JA': ['Yu Gothic', 'Meiryo', 'Noto Sans CJK JP', 'Arial Unicode MS'],
+    'EN': ['Segoe UI', 'Arial', 'DejaVu Sans'],
+}
+
+
+def configure_matplotlib_font(lang=None):
+    """Select an installed Matplotlib font that supports the active UI language."""
+    language = lang or TranslationManager().current_lang
+    candidates = _MATPLOTLIB_FONT_FAMILIES.get(
+        language, _MATPLOTLIB_FONT_FAMILIES['EN']
+    )
+    selected = _MATPLOTLIB_FONT_CACHE.get(language)
+    if selected is None:
+        selected = 'DejaVu Sans'
+        for family in candidates:
+            try:
+                font_manager.findfont(
+                    font_manager.FontProperties(family=family),
+                    fallback_to_default=False,
+                )
+                selected = family
+                break
+            except ValueError:
+                continue
+        _MATPLOTLIB_FONT_CACHE[language] = selected
+    plt.rcParams['font.family'] = 'sans-serif'
+    plt.rcParams['font.sans-serif'] = [
+        selected,
+        *[family for family in candidates if family != selected],
+        'DejaVu Sans',
+    ]
+    return selected
+
+
+configure_matplotlib_font()
 
 OOB_CALCULATED = 'CALCULATED'
 OOB_INSUFFICIENT_DATA = 'INSUFFICIENT_DATA'
@@ -224,6 +265,15 @@ class OOBSettingsDialog(QtWidgets.QDialog):
         self.show_by_tool_help_label.setObjectName("SettingsHelp")
         self.show_by_tool_help_label.setWordWrap(True)
         display_layout.addWidget(self.show_by_tool_help_label)
+
+        # Customer 使用與 By Tool 相同的兩種視圖，但可獨立開關。
+        self.show_by_customer_checkbox = ToggleSwitch(label_text=tr("show_by_customer_charts"))
+        self.show_by_customer_checkbox.setChecked(False)
+        display_layout.addWidget(self.show_by_customer_checkbox)
+        self.show_by_customer_help_label = QtWidgets.QLabel(tr("show_by_customer_help"))
+        self.show_by_customer_help_label.setObjectName("SettingsHelp")
+        self.show_by_customer_help_label.setWordWrap(True)
+        display_layout.addWidget(self.show_by_customer_help_label)
         
         main_layout.addWidget(display_group)
 
@@ -466,6 +516,7 @@ class OOBSettingsDialog(QtWidgets.QDialog):
             'use_interactive_charts': self.interactive_charts_checkbox.isChecked(),
             'use_batch_id_labels': self.use_batch_id_labels_checkbox.isChecked(),
             'show_by_tool_charts': self.show_by_tool_checkbox.isChecked(),
+            'show_by_customer_charts': self.show_by_customer_checkbox.isChecked(),
             'enable_record_high_low': self.record_high_low_checkbox.isChecked(),
             'custom_time_range_enabled': self.custom_time_range_checkbox.isChecked(),
             'start_time': self.start_datetime_edit.date(),
@@ -482,6 +533,8 @@ class OOBSettingsDialog(QtWidgets.QDialog):
             self.use_batch_id_labels_checkbox.setChecked(settings['use_batch_id_labels'])
         if 'show_by_tool_charts' in settings:
             self.show_by_tool_checkbox.setChecked(settings['show_by_tool_charts'])
+        if 'show_by_customer_charts' in settings:
+            self.show_by_customer_checkbox.setChecked(settings['show_by_customer_charts'])
         self.record_high_low_checkbox.setChecked(
             settings.get('enable_record_high_low', False)
         )
@@ -511,6 +564,8 @@ class OOBSettingsDialog(QtWidgets.QDialog):
         self.use_batch_id_labels_checkbox.setText(tr("use_batch_id_labels"))
         self.show_by_tool_checkbox.setText(tr("show_by_tool_charts"))
         self.show_by_tool_help_label.setText(tr("show_by_tool_help"))
+        self.show_by_customer_checkbox.setText(tr("show_by_customer_charts"))
+        self.show_by_customer_help_label.setText(tr("show_by_customer_help"))
         self.oob_rule_group.setTitle(tr("oob_rule_settings"))
         self.record_high_low_checkbox.setText(tr("enable_record_high_low"))
         self.record_high_low_help_label.setText(tr("record_high_low_help"))
@@ -2317,7 +2372,8 @@ def precompute_weekly_rule_results(raw_df, chart_info, weekly_start_date, weekly
 
 
 def plot_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date, debug=False,
-                   precomputed_rule_results=None):
+                   precomputed_rule_results=None, use_batch_id_labels=False):
+    configure_matplotlib_font()
     import os
     import numpy as np
     import matplotlib.pyplot as plt
@@ -2382,7 +2438,11 @@ def plot_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date, debug
 
     # === X 軸 ===
     interval = max(1, len(raw_df) // 30)
-    plt.xticks(x_values[::interval], raw_df['point_time'].dt.strftime("%Y-%m-%d")[::interval], rotation=90)
+    if use_batch_id_labels and 'Batch_ID' in raw_df.columns:
+        x_labels = raw_df['Batch_ID'].astype(str)
+    else:
+        x_labels = raw_df['point_time'].dt.strftime("%Y-%m-%d")
+    plt.xticks(x_values[::interval], x_labels[::interval], rotation=90)
 
     # === 區間上色 ===
     plt.axvspan(start_index, end_index, color='#E83F6F', alpha=0.1, label='Weekly Data')
@@ -2419,6 +2479,7 @@ def plot_spc_chart_interactive(raw_df, chart_info, weekly_start_date, weekly_end
     Args:
         record_results: record_high_low_calculator 的返回結果，包含 record_high, record_low, highlight_status
     """
+    configure_matplotlib_font()
     import numpy as np
     import pandas as pd
     from matplotlib.figure import Figure
@@ -2701,7 +2762,9 @@ def plot_spc_chart_interactive(raw_df, chart_info, weekly_start_date, weekly_end
     
 
 def plot_weekly_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date,
-                          debug=False, precomputed_rule_results=None):
+                          debug=False, precomputed_rule_results=None,
+                          use_batch_id_labels=False):
+    configure_matplotlib_font()
     import os
     import numpy as np
     import matplotlib.pyplot as plt
@@ -2775,7 +2838,11 @@ def plot_weekly_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date
 
     # X axis labels
     interval = max(1, points_num // 30)
-    plt.xticks(x_values[::interval], df_weekly['point_time'].dt.strftime("%Y-%m-%d")[::interval], rotation=90)
+    if use_batch_id_labels and 'Batch_ID' in df_weekly.columns:
+        x_labels = df_weekly['Batch_ID'].astype(str)
+    else:
+        x_labels = df_weekly['point_time'].dt.strftime("%Y-%m-%d")
+    plt.xticks(x_values[::interval], x_labels[::interval], rotation=90)
 
     plt.axvspan(0, points_num - 1, color='#E83F6F', alpha=0.1, label='Weekly Data')
     plt.xlim([x_values[0] - 1, None])
@@ -2806,45 +2873,70 @@ def _get_tool_group_column(dataframe):
     return None
 
 
-def _plot_spc_by_tool_time_base(raw_df, chart_info, weekly_start_date, weekly_end_date, grouped=False):
-    """Create a time-ordered or tool-grouped SPC canvas colored by Tool/Matching."""
+def save_canvas_figure(canvas, chart_info, filename_prefix):
+    """Save the exact Figure used by the GUI and return its Excel image path."""
+    output_path = 'output'
+    os.makedirs(output_path, exist_ok=True)
+    group_name = chart_info.get('group_name', chart_info.get('GroupName', ''))
+    chart_name = chart_info.get('chart_name', chart_info.get('ChartName', ''))
+    safe_group_name = "" if group_name == "Default" else str(group_name)
+    image_path = os.path.join(
+        output_path, f"{filename_prefix}_{safe_group_name}_{chart_name}.png"
+    )
+    canvas.figure.savefig(image_path, bbox_inches='tight')
+    return image_path
+
+
+def _plot_spc_by_group_time_base(
+    raw_df,
+    chart_info,
+    weekly_start_date,
+    weekly_end_date,
+    group_column,
+    title_time_key,
+    title_group_key,
+    missing_key,
+    empty_key,
+    plot_kind_prefix,
+    grouped=False,
+):
+    """Create a time-ordered or grouped SPC canvas colored by a data column."""
+    configure_matplotlib_font()
     import matplotlib.colors as mcolors
 
     figure = Figure(figsize=(13, 3.2))
     axis = figure.add_subplot(111)
     data = raw_df.copy()
-    tool_column = _get_tool_group_column(data)
-
-    if tool_column is None:
-        axis.text(0.5, 0.5, tr("by_tool_missing_column"), ha='center', va='center', transform=axis.transAxes)
+    if group_column is None or group_column not in data.columns:
+        axis.text(0.5, 0.5, tr(missing_key), ha='center', va='center', transform=axis.transAxes)
         axis.set_axis_off()
         return FigureCanvas(figure)
 
     data['point_time'] = pd.to_datetime(data['point_time'], errors='coerce')
     data['point_val'] = pd.to_numeric(data['point_val'], errors='coerce')
     data = data.dropna(subset=['point_time', 'point_val']).copy()
-    data[tool_column] = data[tool_column].fillna('Unassigned').astype(str)
+    data[group_column] = data[group_column].fillna('Unassigned').astype(str)
 
     if data.empty:
-        axis.text(0.5, 0.5, "No valid By Tool data", ha='center', va='center', transform=axis.transAxes)
+        axis.text(0.5, 0.5, tr(empty_key), ha='center', va='center', transform=axis.transAxes)
         axis.set_axis_off()
         return FigureCanvas(figure)
 
-    sort_columns = [tool_column, 'point_time'] if grouped else ['point_time']
+    sort_columns = [group_column, 'point_time'] if grouped else ['point_time']
     data = data.sort_values(sort_columns).reset_index(drop=True)
-    tools = sorted(data[tool_column].unique(), key=lambda value: str(value).casefold())
+    groups = sorted(data[group_column].unique(), key=lambda value: str(value).casefold())
     palette = list(mcolors.TABLEAU_COLORS.values())
-    if len(tools) > len(palette):
-        palette = [plt.get_cmap('tab20')(i / max(len(tools) - 1, 1)) for i in range(len(tools))]
-    tool_colors = {tool: palette[index % len(palette)] for index, tool in enumerate(tools)}
+    if len(groups) > len(palette):
+        palette = [plt.get_cmap('tab20')(i / max(len(groups) - 1, 1)) for i in range(len(groups))]
+    group_colors = {group: palette[index % len(palette)] for index, group in enumerate(groups)}
 
     x_values = np.arange(len(data))
     if not grouped:
         axis.plot(x_values, data['point_val'], color='#94A3B8', linewidth=0.8, alpha=0.45, zorder=1)
 
     artist_rows = {}
-    for tool_index, tool in enumerate(tools):
-        subset = data[data[tool_column] == tool]
+    for group_index, group in enumerate(groups):
+        subset = data[data[group_column] == group]
         line_style = '-' if grouped else 'None'
         artist, = axis.plot(
             subset.index,
@@ -2854,12 +2946,12 @@ def _plot_spc_by_tool_time_base(raw_df, chart_info, weekly_start_date, weekly_en
             linewidth=0.9,
             markersize=4,
             alpha=0.88,
-            color=tool_colors[tool],
-            label=str(tool),
+            color=group_colors[group],
+            label=str(group),
             zorder=3,
         )
         artist_rows[id(artist)] = subset.reset_index(drop=True)
-        if grouped and tool_index > 0:
+        if grouped and group_index > 0:
             axis.axvline(subset.index.min() - 0.5, color='#CBD5E1', linestyle=':', linewidth=1)
 
     if not grouped and weekly_start_date is not None and weekly_end_date is not None:
@@ -2895,7 +2987,7 @@ def _plot_spc_by_tool_time_base(raw_df, chart_info, weekly_start_date, weekly_en
 
     group_name = chart_info.get('group_name', chart_info.get('GroupName', ''))
     chart_name = chart_info.get('chart_name', chart_info.get('ChartName', ''))
-    title_key = 'show_by_tool_group_title' if grouped else 'show_by_tool_time_title'
+    title_key = title_group_key if grouped else title_time_key
     axis.set_title(f"{group_name} / {chart_name}\n{tr(title_key)}", loc='left', fontsize=9, fontweight='bold')
     axis.legend(
         loc='upper left',
@@ -2915,33 +3007,73 @@ def _plot_spc_by_tool_time_base(raw_df, chart_info, weekly_start_date, weekly_en
         cursor = mplcursors.cursor(artists, hover=True)
 
         @cursor.connect('add')
-        def _show_tool_point(selection):
+        def _show_group_point(selection):
             rows = artist_rows.get(id(selection.artist))
             point_index = int(round(float(selection.index)))
             if rows is None or point_index < 0 or point_index >= len(rows):
                 return
             point = rows.iloc[point_index]
             selection.annotation.set_text(
-                f"{tool_column}: {point[tool_column]}\n"
+                f"{group_column}: {point[group_column]}\n"
                 f"Time: {point['point_time']:%Y-%m-%d %H:%M}\n"
                 f"Value: {point['point_val']:.4g}"
             )
         canvas._mpl_cursor = cursor
 
     canvas._plot_args = (raw_df.copy(), chart_info.copy(), weekly_start_date, weekly_end_date)
-    canvas._plot_kind = 'spc_by_tool_group' if grouped else 'spc_by_tool_time'
+    canvas._plot_kind = f'{plot_kind_prefix}_group' if grouped else f'{plot_kind_prefix}_time'
     return canvas
 
 
 def plot_spc_by_tool_time(raw_df, chart_info, weekly_start_date=None, weekly_end_date=None):
-    return _plot_spc_by_tool_time_base(
-        raw_df, chart_info, weekly_start_date, weekly_end_date, grouped=False
+    return _plot_spc_by_group_time_base(
+        raw_df, chart_info, weekly_start_date, weekly_end_date,
+        group_column=_get_tool_group_column(raw_df),
+        title_time_key='show_by_tool_time_title',
+        title_group_key='show_by_tool_group_title',
+        missing_key='by_tool_missing_column',
+        empty_key='by_tool_no_valid_data',
+        plot_kind_prefix='spc_by_tool',
+        grouped=False,
     )
 
 
 def plot_spc_by_tool_time_grouping(raw_df, chart_info, weekly_start_date=None, weekly_end_date=None):
-    return _plot_spc_by_tool_time_base(
-        raw_df, chart_info, weekly_start_date, weekly_end_date, grouped=True
+    return _plot_spc_by_group_time_base(
+        raw_df, chart_info, weekly_start_date, weekly_end_date,
+        group_column=_get_tool_group_column(raw_df),
+        title_time_key='show_by_tool_time_title',
+        title_group_key='show_by_tool_group_title',
+        missing_key='by_tool_missing_column',
+        empty_key='by_tool_no_valid_data',
+        plot_kind_prefix='spc_by_tool',
+        grouped=True,
+    )
+
+
+def plot_spc_by_customer_time(raw_df, chart_info, weekly_start_date=None, weekly_end_date=None):
+    return _plot_spc_by_group_time_base(
+        raw_df, chart_info, weekly_start_date, weekly_end_date,
+        group_column='Customer' if 'Customer' in raw_df.columns else None,
+        title_time_key='show_by_customer_time_title',
+        title_group_key='show_by_customer_group_title',
+        missing_key='by_customer_missing_column',
+        empty_key='by_customer_no_valid_data',
+        plot_kind_prefix='spc_by_customer',
+        grouped=False,
+    )
+
+
+def plot_spc_by_customer_time_grouping(raw_df, chart_info, weekly_start_date=None, weekly_end_date=None):
+    return _plot_spc_by_group_time_base(
+        raw_df, chart_info, weekly_start_date, weekly_end_date,
+        group_column='Customer' if 'Customer' in raw_df.columns else None,
+        title_time_key='show_by_customer_time_title',
+        title_group_key='show_by_customer_group_title',
+        missing_key='by_customer_missing_column',
+        empty_key='by_customer_no_valid_data',
+        plot_kind_prefix='spc_by_customer',
+        grouped=True,
     )
 
 
@@ -2955,6 +3087,7 @@ def plot_weekly_spc_chart_interactive(raw_df, chart_info, weekly_start_date, wee
     支援 Batch_ID 作為 X 軸標籤
     支援標記 record high/low 點
     """
+    configure_matplotlib_font()
     import numpy as np
     import pandas as pd
     from matplotlib.figure import Figure
@@ -3197,19 +3330,36 @@ def save_results_to_excel(results_df, scale_factor=0.3):
     cell_format = workbook.add_format({'align': 'center', 'valign': 'vcenter', 'font_name': 'Arial', 'font_size': 10})
     header_format = workbook.add_format({'align': 'center', 'valign': 'vcenter', 'font_name': 'Arial', 'font_size': 12, 'bold': True})
 
+    image_specs = [
+        ('chart_path', 'Total Chart'),
+        ('weekly_chart_path', 'Weekly Chart'),
+    ]
+    optional_image_specs = [
+        ('by_tool_time_path', 'By Tool (Time)'),
+        ('by_tool_group_path', 'By Tool (Grouping)'),
+        ('by_customer_time_path', 'By Customer (Time)'),
+        ('by_customer_group_path', 'By Customer (Grouping)'),
+    ]
+    image_specs.extend(
+        spec for spec in optional_image_specs if spec[0] in results_df.columns
+    )
+    image_column_count = len(image_specs)
     col_widths = {}
 
+    for image_col_idx, (_, header) in enumerate(image_specs):
+        worksheet.write(0, image_col_idx, header, header_format)
+
     for col_idx, header in enumerate(results_df.columns):
-        worksheet.write(0, col_idx + 2, header, header_format)
-        col_widths[col_idx + 2] = max(len(header), col_widths.get(col_idx + 2, 0))
+        excel_col_idx = col_idx + image_column_count
+        worksheet.write(0, excel_col_idx, header, header_format)
+        col_widths[excel_col_idx] = max(
+            len(header), col_widths.get(excel_col_idx, 0)
+        )
 
     max_image_height = 0
-    image_column_width = 0
+    image_column_widths = [0] * image_column_count
 
     for row_idx, row in enumerate(results_df.itertuples(index=False), start=1):
-        img_path = row.chart_path
-        weekly_spc_chart_path = row.weekly_chart_path
-
         x_offset = 0
         y_offset = 10
         options = {
@@ -3220,31 +3370,37 @@ def save_results_to_excel(results_df, scale_factor=0.3):
             'object_position': 1
         }
 
-        worksheet.insert_image(row_idx, 0, img_path, options)
-        worksheet.insert_image(row_idx, 1, weekly_spc_chart_path, options)
+        for image_col_idx, (path_column, _) in enumerate(image_specs):
+            image_path = getattr(row, path_column, None)
+            if not isinstance(image_path, str) or not os.path.exists(image_path):
+                continue
+            worksheet.insert_image(row_idx, image_col_idx, image_path, options)
+            with Image.open(image_path) as img:
+                image_width, image_height = img.size
+            scaled_width = image_width * scale_factor
+            scaled_height = image_height * scale_factor
+            max_image_height = max(max_image_height, scaled_height)
+            image_column_widths[image_col_idx] = max(
+                image_column_widths[image_col_idx], scaled_width
+            )
 
-        img = Image.open(img_path)
-        image_width, image_height = img.size
-        scaled_width = image_width * scale_factor
-        scaled_height = image_height * scale_factor
+        for col_idx, value in enumerate(row):
+            excel_col_idx = col_idx + image_column_count
+            worksheet.write(row_idx, excel_col_idx, value, cell_format)
+            col_widths[excel_col_idx] = max(
+                col_widths.get(excel_col_idx, 0), len(str(value))
+            )
 
-        if scaled_height > max_image_height:
-            max_image_height = scaled_height
-        if scaled_width > image_column_width:
-            image_column_width = scaled_width
-
-        for col_idx, value in enumerate(row, start=1):
-            worksheet.write(row_idx, col_idx + 1, value, cell_format)
-            col_widths[col_idx + 1] = max(col_widths.get(col_idx + 1, 0), len(str(value)))
-
-    worksheet.set_column(0, 0, image_column_width / 7)
-    worksheet.set_column(1, 1, image_column_width / 7)
+    for image_col_idx, image_column_width in enumerate(image_column_widths):
+        worksheet.set_column(
+            image_col_idx, image_col_idx, max(image_column_width / 7, 18)
+        )
 
     for col_idx, width in col_widths.items():
         worksheet.set_column(col_idx, col_idx, width + 5)
 
     for row_idx in range(1, len(results_df) + 1):
-        worksheet.set_row(row_idx, max_image_height)
+        worksheet.set_row(row_idx, max(max_image_height, 20))
 
     workbook.close()
 
@@ -3697,7 +3853,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         self.left_menu_layout.setSpacing(7)
 
         # 語言切換按鈕（在最上方）
-        self.lang_button = QtWidgets.QPushButton("中 / EN")
+        self.lang_button = QtWidgets.QPushButton(tr("lang_button"))
         self.lang_button.setFixedHeight(32)
         self.lang_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.lang_button.setStyleSheet("""
@@ -3826,6 +3982,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
             'show_charts_gui': True,
             'use_interactive_charts': True,
             'show_by_tool_charts': False,
+            'show_by_customer_charts': False,
             'enable_record_high_low': False,
             'custom_time_range_enabled': False,
             'start_time': QtCore.QDateTime.currentDateTime().addDays(-30),
@@ -4469,8 +4626,10 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
     
     def refresh_ui_texts(self):
         """刷新所有UI文字（當語言切換時被調用）"""
+        configure_matplotlib_font(self.translator.current_lang)
         # 更新視窗標題
         self.setWindowTitle(tr("app_title"))
+        self.lang_button.setText(tr("lang_button"))
         
         # 更新左側選單按鈕
         self.home_button.setText(tr("home"))
@@ -4930,6 +5089,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
 
     def create_status_pie_chart(self, processed, skipped):
         from translations import tr
+        configure_matplotlib_font()
         fig = Figure(figsize=(4.2, 3.2), facecolor="#FFFFFF")
         ax = fig.add_subplot(111)
         labels = [tr('processed'), tr('no_data')]
@@ -4957,6 +5117,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         return FigureCanvas(fig)
     def create_processed_violation_pie_chart(self, processed_count, violating_count):
         from translations import tr
+        configure_matplotlib_font()
         
         fig = Figure(figsize=(4.2, 3.2), facecolor="#FFFFFF")
         ax = fig.add_subplot(111)
@@ -5002,6 +5163,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         return FigureCanvas(fig)
     def create_anomaly_bar_chart(self, ooc_count, we_count, oob_count):
         from translations import tr
+        configure_matplotlib_font()
         
         fig = Figure(figsize=(4.8, 3.2), facecolor="#FFFFFF")
         ax = fig.add_subplot(111)
@@ -5891,14 +6053,10 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                 )
                 print(f" - analyze_chart: plot_weekly_spc_chart_interactive 完成")
                 
-                # 為了保持相容性，仍然保存靜態圖片版本供 Excel 使用
-                image_path, _ = plot_spc_chart(
-                    raw_df, chart_info, weekly_start_date, weekly_end_date,
-                    precomputed_rule_results=rule_results,
-                )
-                weekly_image_path = plot_weekly_spc_chart(
-                    raw_df, chart_info, weekly_start_date, weekly_end_date,
-                    precomputed_rule_results=rule_results,
+                # Excel 直接使用 GUI 的同一份 Figure，確保 Batch ID 與畫面完全一致。
+                image_path = save_canvas_figure(spc_canvas, chart_info, 'SPC')
+                weekly_image_path = save_canvas_figure(
+                    weekly_canvas, chart_info, 'Weekly_SPC'
                 )
                 
                 # 儲存 canvas 供 UI 使用
@@ -5909,6 +6067,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                 image_path, violated_rules = plot_spc_chart(
                     raw_df, chart_info, weekly_start_date, weekly_end_date,
                     precomputed_rule_results=rule_results,
+                    use_batch_id_labels=use_batch_id_labels,
                 )
                 print(f" - analyze_chart: plot_spc_chart 完成，image_path: {image_path}")
 
@@ -5916,6 +6075,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                 weekly_image_path = plot_weekly_spc_chart(
                     raw_df, chart_info, weekly_start_date, weekly_end_date,
                     precomputed_rule_results=rule_results,
+                    use_batch_id_labels=use_batch_id_labels,
                 )
                 print(f" - analyze_chart: plot_weekly_spc_chart 完成，weekly_image_path: {weekly_image_path}")
 
@@ -5938,9 +6098,34 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                     result['by_tool_group_canvas'] = plot_spc_by_tool_time_grouping(
                         raw_df, chart_info, weekly_start_date, weekly_end_date
                     )
+                    result['by_tool_time_path'] = save_canvas_figure(
+                        result['by_tool_time_canvas'], chart_info, 'ByTool_Time'
+                    )
+                    result['by_tool_group_path'] = save_canvas_figure(
+                        result['by_tool_group_canvas'], chart_info, 'ByTool_Group'
+                    )
                 except Exception as chart_error:
                     logger.exception("Failed to create By Tool charts: %s", chart_error)
                     result['by_tool_chart_error'] = str(chart_error)
+
+            if self.oob_settings.get('show_by_customer_charts', False):
+                # By Customer 圖僅影響顯示，不改變既有 OOB／SPC 計算結果。
+                try:
+                    result['by_customer_time_canvas'] = plot_spc_by_customer_time(
+                        raw_df, chart_info, weekly_start_date, weekly_end_date
+                    )
+                    result['by_customer_group_canvas'] = plot_spc_by_customer_time_grouping(
+                        raw_df, chart_info, weekly_start_date, weekly_end_date
+                    )
+                    result['by_customer_time_path'] = save_canvas_figure(
+                        result['by_customer_time_canvas'], chart_info, 'ByCustomer_Time'
+                    )
+                    result['by_customer_group_path'] = save_canvas_figure(
+                        result['by_customer_group_canvas'], chart_info, 'ByCustomer_Group'
+                    )
+                except Exception as chart_error:
+                    logger.exception("Failed to create By Customer charts: %s", chart_error)
+                    result['by_customer_chart_error'] = str(chart_error)
 
             print(f" - analyze_chart 處理完成並返回結果 for {group_name}/{chart_name}")
             return result
@@ -6208,6 +6393,13 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                          'baseline_insufficient', 'baseline_empty',
                          'HL_record_high_low', 'record_high', 'record_low',
                          'chart_path', 'weekly_chart_path']
+        optional_chart_path_cols = [
+            'by_tool_time_path', 'by_tool_group_path',
+            'by_customer_time_path', 'by_customer_group_path',
+        ]
+        expected_cols.extend(
+            col for col in optional_chart_path_cols if col in results_df.columns
+        )
         for col in expected_cols:
             if col not in results_df.columns:
                 results_df[col] = np.nan
@@ -6231,6 +6423,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         spc_canvas = result.get('spc_canvas')
         weekly_canvas = result.get('weekly_canvas')
         show_by_tool = self.oob_settings.get('show_by_tool_charts', False)
+        show_by_customer = self.oob_settings.get('show_by_customer_charts', False)
         
         if spc_canvas:
             # 使用互動式 SPC 圖表
@@ -6284,6 +6477,31 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                     tr('show_by_tool_group_title'), unavailable_message
                 )
 
+        by_customer_time_layout = None
+        by_customer_group_layout = None
+        if show_by_customer:
+            by_customer_time_canvas = result.get('by_customer_time_canvas')
+            by_customer_group_canvas = result.get('by_customer_group_canvas')
+            unavailable_message = result.get(
+                'by_customer_chart_error', tr('by_customer_missing_column')
+            )
+            if by_customer_time_canvas is not None:
+                by_customer_time_layout = self.create_canvas_layout(
+                    by_customer_time_canvas, min_width=350, min_height=150
+                )
+            else:
+                by_customer_time_layout = self._create_chart_unavailable_layout(
+                    tr('show_by_customer_time_title'), unavailable_message
+                )
+            if by_customer_group_canvas is not None:
+                by_customer_group_layout = self.create_canvas_layout(
+                    by_customer_group_canvas, min_width=350, min_height=150
+                )
+            else:
+                by_customer_group_layout = self._create_chart_unavailable_layout(
+                    tr('show_by_customer_group_title'), unavailable_message
+                )
+
         result_card = QtWidgets.QFrame()
         result_card.setObjectName("OOBResultCard")
         result_layout = QtWidgets.QGridLayout(result_card)
@@ -6292,12 +6510,16 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         result_layout.setVerticalSpacing(14)
         result_layout.addLayout(spc_chart_layout, 0, 0)
         result_layout.addLayout(weekly_chart_layout, 0, 1)
+        chart_row_count = 1
         if show_by_tool:
-            result_layout.addLayout(by_tool_time_layout, 1, 0)
-            result_layout.addLayout(by_tool_group_layout, 1, 1)
-            result_layout.addLayout(info_layout, 0, 2, 2, 1)
-        else:
-            result_layout.addLayout(info_layout, 0, 2)
+            result_layout.addLayout(by_tool_time_layout, chart_row_count, 0)
+            result_layout.addLayout(by_tool_group_layout, chart_row_count, 1)
+            chart_row_count += 1
+        if show_by_customer:
+            result_layout.addLayout(by_customer_time_layout, chart_row_count, 0)
+            result_layout.addLayout(by_customer_group_layout, chart_row_count, 1)
+            chart_row_count += 1
+        result_layout.addLayout(info_layout, 0, 2, chart_row_count, 1)
         result_layout.setColumnStretch(0, 4)
         result_layout.setColumnStretch(1, 4)
         result_layout.setColumnStretch(2, 2)
@@ -6414,6 +6636,10 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                     new_canvas = plot_spc_by_tool_time(raw_df_arg, chart_info_arg, ws_arg, we_arg)
                 elif kind == 'spc_by_tool_group':
                     new_canvas = plot_spc_by_tool_time_grouping(raw_df_arg, chart_info_arg, ws_arg, we_arg)
+                elif kind == 'spc_by_customer_time':
+                    new_canvas = plot_spc_by_customer_time(raw_df_arg, chart_info_arg, ws_arg, we_arg)
+                elif kind == 'spc_by_customer_group':
+                    new_canvas = plot_spc_by_customer_time_grouping(raw_df_arg, chart_info_arg, ws_arg, we_arg)
         except Exception:
             new_canvas = None
 
@@ -6650,7 +6876,7 @@ class SplitDataWidget(QtWidgets.QWidget):
             self.progress_bar.setFormat(tr('processing_progress'))
         
         # 更新狀態標籤
-        if self.status_label.text() == "Ready." or self.status_label.text() == "準備就緒。":
+        if TranslationManager().is_translation_value("ready", self.status_label.text()):
             self.status_label.setText(tr('ready'))
 
     def init_ui(self):
@@ -7376,7 +7602,9 @@ class CLTightenWidget(QtWidgets.QWidget):
         # 更新統計標籤
         if hasattr(self, 'stats_label'):
             current_text = self.stats_label.text()
-            if current_text in ["No data loaded", "未載入資料", "N/A"]:
+            if current_text == "N/A" or TranslationManager().is_translation_value(
+                "no_data_loaded", current_text
+            ):
                 self.stats_label.setText(tr("no_data_loaded"))
         
         # 更新預設標籤
@@ -8170,10 +8398,14 @@ class CLTightenWidget(QtWidgets.QWidget):
         metrics_grid.setColumnStretch(3, 1)
         
         # 計算數據
-        initial_ooc = result.get('Ori_OOC_Count', 0)  # ✅ 修正：使用正確的欄位名
+        initial_ooc = result.get('Ori_OOC_Count', 0)
         final_ooc = result.get('Final_OOC_Count', 'N/A')
         data_count = result.get('DataCountUsed', 0)
-        ooc_rate = f"{(initial_ooc / data_count * 100):.1f}%" if data_count > 0 else "N/A"
+        total_data_count = result.get('TotalDataCount', data_count)
+        ooc_rate = (
+            f"{(initial_ooc / total_data_count * 100):.1f}%"
+            if total_data_count > 0 else "N/A"
+        )
         
         # 處理 Pattern 文字（確保是字符串類型）
         pattern_text = result.get('Pattern', 'N/A')
@@ -8195,8 +8427,13 @@ class CLTightenWidget(QtWidgets.QWidget):
         self.add_metric_item(metrics_grid, 0, 2, "Data Count", str(data_count))
         
         # 第二行
-        self.add_metric_item(metrics_grid, 1, 0, "OOC Count", f"{initial_ooc} → {final_ooc}", highlight=True)
-        self.add_metric_item(metrics_grid, 1, 2, "OOC Rate", ooc_rate, highlight=True)
+        self.add_metric_item(
+            metrics_grid, 1, 0, "OOC (Ori→Final)",
+            f"{initial_ooc} → {final_ooc}", highlight=True
+        )
+        self.add_metric_item(
+            metrics_grid, 1, 2, "Original OOC Rate", ooc_rate, highlight=True
+        )
         
         # 第三行
         self.add_metric_item(metrics_grid, 2, 0, "Ori K Set", ori_k_display)

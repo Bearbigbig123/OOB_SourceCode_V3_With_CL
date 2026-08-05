@@ -55,6 +55,13 @@ class TranslationManager:
         """獲取翻譯文字"""
         translations = getattr(Translations, self._current_lang, Translations.EN)
         return translations.get(key, Translations.EN.get(key, default))
+
+    def is_translation_value(self, key, value):
+        """Return whether value is a translation of key in any supported language."""
+        return any(
+            getattr(Translations, lang, {}).get(key) == value
+            for lang in self.SUPPORTED_LANGS
+        )
     
     def toggle_language(self):
         """依序切換繁中、英文、韓文與日文。"""
@@ -139,7 +146,7 @@ class Translations:
         "cl_tighten_subtitle": "Compare current control limits and focus on charts that need adjustment.",
         
         # === Language ===
-        "lang_button": "🌐 한국어",
+        "lang_button": "🌐 English",
         "current_language": "Current Language: English",
         
         # === Buttons ===
@@ -166,6 +173,13 @@ class Translations:
         "show_by_tool_time_title": "Show by Tool (by time)",
         "show_by_tool_group_title": "Show by Tool (by time) grouping",
         "by_tool_missing_column": "Raw data has no Tool or Matching column.",
+        "by_tool_no_valid_data": "No valid By Tool data.",
+        "show_by_customer_charts": "Show by Customer (by time) and grouping",
+        "show_by_customer_help": "Adds two Customer views to each result. When enabled, two additional charts are shown.",
+        "show_by_customer_time_title": "Show by Customer (by time)",
+        "show_by_customer_group_title": "Show by Customer (by time) grouping",
+        "by_customer_missing_column": "Raw data has no Customer column.",
+        "by_customer_no_valid_data": "No valid By Customer data.",
         "finalizing_results": "Finalizing results...",
         "oob_settings_intro": "Choose how charts are displayed and which time range is analyzed.",
         "oob_rule_settings": "OOB Detection Rules",
@@ -611,7 +625,7 @@ class Translations:
         "cl_tighten_subtitle": "比較目前管制界線，快速聚焦需要調整的圖表。",
         
         # === 語言 ===
-        "lang_button": "🌐 EN",
+        "lang_button": "🌐 中文",
         "current_language": "目前語言：繁體中文",
         
         # === 按鈕 ===
@@ -638,6 +652,13 @@ class Translations:
         "show_by_tool_time_title": "Show by Tool（依時間）",
         "show_by_tool_group_title": "Show by Tool（依時間分組）",
         "by_tool_missing_column": "原始資料缺少 Tool 或 Matching 欄位。",
+        "by_tool_no_valid_data": "沒有可用的 Tool／Matching 資料。",
+        "show_by_customer_charts": "顯示 Show by Customer（依時間）與分組圖",
+        "show_by_customer_help": "每個結果增加兩張 Customer 圖；開啟後會額外顯示兩張圖。",
+        "show_by_customer_time_title": "Show by Customer（依時間）",
+        "show_by_customer_group_title": "Show by Customer（依時間分組）",
+        "by_customer_missing_column": "原始資料缺少 Customer 欄位。",
+        "by_customer_no_valid_data": "沒有可用的 Customer 資料。",
         "finalizing_results": "正在整理結果...",
         "oob_settings_intro": "選擇圖表顯示方式，以及這次分析使用的時間範圍。",
         "oob_rule_settings": "OOB 判定規則",
@@ -1079,7 +1100,7 @@ Translations.KO.update({
     'tool_matching': '장비 분석',
     'cl_tighten': '관리선 계산',
     'cl_tighten_subtitle': '현재 관리 한계를 비교하고 조정이 필요한 차트에 집중하세요.',
-    'lang_button': '🌐 日本語',
+    'lang_button': '🌐 한국어',
     'current_language': '현재 언어: 한국어',
     'start_processing': '실행 시작',
     'export_results': '결과 내보내기',
@@ -1100,6 +1121,13 @@ Translations.KO.update({
     'show_by_tool_time_title': '도구별 표시(시간별)',
     'show_by_tool_group_title': '도구별(시간별) 그룹화로 표시',
     'by_tool_missing_column': '원시 데이터에는 도구 또는 일치 열이 없습니다.',
+    'by_tool_no_valid_data': '사용 가능한 도구/일치 데이터가 없습니다.',
+    'show_by_customer_charts': '고객별(시간별) 및 그룹 차트 표시',
+    'show_by_customer_help': '각 결과에 고객 보기 두 개를 추가합니다. 활성화하면 차트 두 개가 더 표시됩니다.',
+    'show_by_customer_time_title': '고객별 표시(시간별)',
+    'show_by_customer_group_title': '고객별 표시(시간별 그룹)',
+    'by_customer_missing_column': '원시 데이터에 Customer 열이 없습니다.',
+    'by_customer_no_valid_data': '사용 가능한 고객 데이터가 없습니다.',
     'finalizing_results': '결과를 마무리하는 중...',
     'oob_settings_intro': '차트가 표시되는 방식과 분석되는 시간 범위를 선택합니다.',
     'oob_rule_settings': 'OOB 탐지 규칙',
@@ -1474,7 +1502,7 @@ Translations.JA.update({
     'tool_matching': 'ツールマッチング',
     'cl_tighten': 'CL 締め付け Cal.',
     'cl_tighten_subtitle': '現在の管理限界を比較し、調整が必要なチャートに焦点を当てます。',
-    'lang_button': '🌐 中文',
+    'lang_button': '🌐 日本語',
     'current_language': '現在の言語：日本語',
     'start_processing': '処理の開始',
     'export_results': '結果のエクスポート',
@@ -1495,6 +1523,13 @@ Translations.JA.update({
     'show_by_tool_time_title': 'ツール別表示（時間別）',
     'show_by_tool_group_title': 'ツール別（時間別）のグループ化を表示',
     'by_tool_missing_column': '生データにはツール列やマッチング列がありません。',
+    'by_tool_no_valid_data': '有効なツール／マッチングデータがありません。',
+    'show_by_customer_charts': '顧客別（時間別）およびグループ別に表示',
+    'show_by_customer_help': '各結果に顧客ビューを 2 つ追加します。有効にするとグラフが 2 つ追加されます。',
+    'show_by_customer_time_title': '顧客別表示（時間別）',
+    'show_by_customer_group_title': '顧客別表示（時間別グループ）',
+    'by_customer_missing_column': '生データに Customer 列がありません。',
+    'by_customer_no_valid_data': '有効な顧客データがありません。',
     'finalizing_results': '結果を最終処理中...',
     'oob_settings_intro': 'チャートの表示方法と分析する時間範囲を選択します。',
     'oob_rule_settings': 'OOB 検出ルール',

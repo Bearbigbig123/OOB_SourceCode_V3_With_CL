@@ -16,7 +16,7 @@ import matplotlib.font_manager as fm
 
 from math import gcd, floor, ceil
 from functools import reduce
-from scipy.stats import skew, median_abs_deviation, kurtosis, norm, rankdata
+from scipy.stats import skew, median_abs_deviation, kurtosis, norm
 import scipy.stats as stats
 
 # 設定中文字體（添加異常處理）
@@ -28,114 +28,124 @@ except Exception as e:
     plt.rcParams['font.family'] = 'DejaVu Sans'
 
 
+def estimate_johnson_slifker_shapiro_parameters(
+    m, n_val, p, x_z, x_neg_z, z_val=0.524, tol=0.05
+):
+    """Estimate Johnson parameters using the supplied SAS Slifker-Shapiro formulas."""
+    m = float(m)
+    n_val = float(n_val)
+    p = float(p)
+    if p <= 0 or m <= 0 or n_val <= 0:
+        raise ValueError("Invalid quantile distance")
+
+    m_over_p = m / p
+    n_over_p = n_val / p
+    ratio = m * n_val / (p ** 2)
+    midpoint = (x_z + x_neg_z) / 2
+
+    if ratio > 1.0 + tol:
+        family = "SU"
+        temp = 0.5 * (m_over_p + n_over_p)
+        eta = 2 * z_val / np.log(temp + np.sqrt(temp * temp - 1))
+
+        temp = (n_over_p - m_over_p) / (2 * np.sqrt(ratio - 1))
+        gamma = eta * np.log(temp + np.sqrt(temp * temp + 1))
+
+        denominator = (
+            (m_over_p + n_over_p - 2)
+            * np.sqrt(m_over_p + n_over_p + 2)
+        )
+        lambda_param = 2 * p * np.sqrt(ratio - 1) / denominator
+        epsilon = midpoint + p * (n_over_p - m_over_p) / (
+            2 * (m_over_p + n_over_p - 2)
+        )
+    elif ratio < 1.0 - tol:
+        family = "SB"
+        product = (1 + p / m) * (1 + p / n_val)
+        temp = 0.5 * np.sqrt(product)
+        eta = z_val / np.log(temp + np.sqrt(temp * temp - 1))
+
+        denominator = 2 * (p * p / (m * n_val) - 1)
+        temp = (p / n_val - p / m) * np.sqrt(product - 4) / denominator
+        gamma = eta * np.log(temp + np.sqrt(temp * temp + 1))
+
+        denominator = p * p / (m * n_val) - 1
+        lambda_param = p * np.sqrt((product - 2) ** 2 - 4) / denominator
+        epsilon = midpoint - lambda_param / 2 + p * (p / n_val - p / m) / (
+            2 * denominator
+        )
+    else:
+        family = "SL"
+        if m_over_p <= 1:
+            raise ValueError("SL requires m / p > 1")
+        eta = 2 * z_val / np.log(m_over_p)
+        gamma = eta * np.log(
+            (m_over_p - 1) / (p * np.sqrt(m_over_p))
+        )
+        epsilon = midpoint - (p / 2) * (m_over_p + 1) / (m_over_p - 1)
+        lambda_param = None
+
+    parameters = {
+        "eta": float(eta),
+        "gamma": float(gamma),
+        "lambda": None if lambda_param is None else float(lambda_param),
+        "epsilon": float(epsilon),
+        "ratio": float(ratio),
+    }
+    if not all(
+        np.isfinite(value)
+        for value in parameters.values()
+        if value is not None
+    ):
+        raise ValueError("Non-finite Johnson parameter")
+    if lambda_param is not None and lambda_param <= 0:
+        raise ValueError("Lambda <= 0")
+    return family, parameters
+
+
 def transform_johnson_slifker_shapiro_full(data):
-    """
-    修正版: 使用 Slifker-Shapiro (1980) 演算法進行 Johnson 轉換
-    修正重點: 
-    1. SU 使用正確的 arccosh 計算 delta
-    2. SL 使用正確的 log(x-xi) 公式 (無分母)
-    3. SB/其他情況 使用 Rank-based INT 避免崩潰
-    """
-    data = np.array(data)
-    n = len(data)
-    
-    if n < 10: # 數據太少不適合用 Slifker
-        # 回傳簡單的 Z-score
-        return (data - np.mean(data)) / (np.std(data, ddof=1) + 1e-9), "Insufficient_Data"
-    
+    """Transform data with the SAS Slifker-Shapiro Johnson SU/SB/SL formulas."""
+    data = np.asarray(data, dtype=float)
+    sample_size = len(data)
+
+    if sample_size < 10:
+        raise ValueError("Insufficient data for Johnson transformation")
+
     try:
-        # Step 1: 計算 Percentiles (z = 0.524)
         z_val = 0.524
-        cdf_vals = norm.cdf([-3*z_val, -z_val, z_val, 3*z_val])
-        
-        # 使用 linear 插值
-        x_quants = np.percentile(data, cdf_vals * 100)
-        x_neg_3z, x_neg_z, x_z, x_3z = x_quants[0], x_quants[1], x_quants[2], x_quants[3]
-        
-        # Step 2: 計算 m, n, p
+        cdf_vals = norm.cdf([-3 * z_val, -z_val, z_val, 3 * z_val])
+        x_neg_3z, x_neg_z, x_z, x_3z = np.percentile(data, cdf_vals * 100)
         m = x_3z - x_z
         n_val = x_neg_z - x_neg_3z
         p = x_z - x_neg_z
-        
-        if p <= 0 or m <= 0 or n_val <= 0:
-             raise ValueError("Invalid quantile distance")
-        
-        # Step 3: 計算 QR
-        QR = (m * n_val) / (p**2)
-        
-        # Step 4: 策略分支
-        
-        # === Case A: Johnson SU (Unbounded) ===
-        if QR > 1.05:
-            system_type = "SU"
-            
-            # [修正] 使用 arccosh 計算 delta
-            cosh_arg = 0.5 * (m/p + n_val/p)
-            if cosh_arg < 1: cosh_arg = 1.0001
-            
-            eta = 2 * z_val
-            delta = eta / np.arccosh(cosh_arg)
-            
-            # 計算 gamma
-            sinh_arg = (n_val/p - m/p) / (2 * np.sqrt(QR - 1))
-            gamma = delta * np.arcsinh(sinh_arg)
-            
-            # 計算 lambda 和 xi
-            lambda_param = (2 * p * np.sqrt(QR - 1)) / (m/p + n_val/p - 2)
-            xi = (x_z + x_neg_z) / 2 - (p * (n_val/p - m/p)) / (2 * (m/p + n_val/p - 2))
-            
-            if lambda_param <= 0: raise ValueError("Lambda <= 0")
-            
-            # [公式] SU: arcsinh
-            transformed = gamma + delta * np.arcsinh((data - xi) / lambda_param)
-            return transformed, system_type
 
-        # === Case B: Johnson SL (Lognormal) ===
-        elif 0.95 <= QR <= 1.05:
-            system_type = "SL"
-            
-            # [修正] SL 參數估計公式
-            eta = 2 * z_val
-            # 這裡用 m/p 近似 n/p
-            ratio = m / p 
-            if ratio <= 1: ratio = 1.0001
-            
-            delta = eta / np.log(ratio)
-            
-            # 計算 xi (下限)
-            # Slifker 對 SL 的 xi 估計:
-            xi = 0.5 * (x_z + x_neg_z) - 0.5 * p * (ratio + 1) / (ratio - 1)
-            
-            # 計算 gamma
-            # 從 z = gamma + delta * ln(x_z - xi) 反推
-            if (x_z - xi) <= 0: raise ValueError("Invalid SL gamma param")
-            gamma = z_val - delta * np.log(x_z - xi)
-            
-            # [安全性檢查] 確保所有數據都大於下限 xi
-            safe_data = data - xi
-            if np.any(safe_data <= 0):
-                # 如果數據違背 SL 假設 (有值 <= 下限)，轉用 Rank
-                raise ValueError("Data violates SL lower bound")
-                
-            # [公式] SL: log(X - xi)  <--- 注意：這裡沒有分母！
-            transformed = gamma + delta * np.log(safe_data)
-            return transformed, system_type
+        family, parameters = estimate_johnson_slifker_shapiro_parameters(
+            m, n_val, p, x_z, x_neg_z, z_val=z_val
+        )
+        eta = parameters["eta"]
+        gamma = parameters["gamma"]
+        epsilon = parameters["epsilon"]
 
+        if family == "SU":
+            transformed = gamma + eta * np.arcsinh(
+                (data - epsilon) / parameters["lambda"]
+            )
+        elif family == "SB":
+            scaled = (data - epsilon) / parameters["lambda"]
+            if np.any((scaled <= 0) | (scaled >= 1)):
+                raise ValueError("Data violates SB bounds")
+            transformed = gamma + eta * np.log(scaled / (1 - scaled))
         else:
-            # QR < 0.95 (SB) 或其他情況
-            # 為了系統穩定，統一使用 Rank-based INT
-            raise ValueError("QR indicates SB or Normal, fallback to Rank INT")
-            
-    except Exception as e:
-        # Fallback: Rank-based Inverse Normal Transformation
-        # 這是最安全的兜底方案
-        system_type = "Rank_INT"
-        ranks = rankdata(data, method='average')
-        probabilities = (ranks - 0.375) / (n + 0.25)
-        transformed = norm.ppf(probabilities)
-        transformed = np.clip(transformed, -6, 6)
-        
-        return transformed, system_type
+            shifted = data - epsilon
+            if np.any(shifted <= 0):
+                raise ValueError("Data violates SL lower bound")
+            transformed = gamma + eta * np.log(shifted)
+
+        if not np.all(np.isfinite(transformed)):
+            raise ValueError("Non-finite Johnson transformation")
+        return transformed, family
+    except (FloatingPointError, ValueError, ZeroDivisionError) as exc:
+        raise ValueError(f"Johnson transformation failed: {exc}") from exc
 
 
 class CLTightenCalculator:
@@ -267,6 +277,151 @@ class CLTightenCalculator:
             z = 0.6745 * np.abs(values - med) / mad
         return z
 
+    def filter_original_by_robust_z(self, values, threshold=4.5):
+        """Filter original-scale values whose Robust/Modified Z exceeds threshold."""
+        original = np.asarray(values, dtype=float)
+        if original.size == 0:
+            return original
+        robust_z = self.robust_zscore_sop2(original)
+        normal_mask = np.isfinite(robust_z) & (robust_z <= threshold)
+        if not np.any(normal_mask):
+            return original
+        return original[normal_mask]
+
+    def count_ooc(self, values, ucl=np.nan, lcl=np.nan, characteristic='Nominal'):
+        """Count OOC points using the active limit(s) for the chart characteristic."""
+        clean_values = np.asarray(values, dtype=float)
+        clean_values = clean_values[np.isfinite(clean_values)]
+
+        upper_count = 0
+        lower_count = 0
+        if ucl is not None and pd.notna(ucl) and np.isfinite(float(ucl)):
+            upper_count = int(np.sum(clean_values > float(ucl)))
+        if lcl is not None and pd.notna(lcl) and np.isfinite(float(lcl)):
+            lower_count = int(np.sum(clean_values < float(lcl)))
+
+        if characteristic == 'Smaller':
+            return upper_count
+        if characteristic == 'Bigger':
+            return lower_count
+        return upper_count + lower_count
+
+    def calculate_output_limit_metrics(
+        self, original_ucl, original_lcl, suggest_ucl, suggest_lcl,
+        center, sigma_u, sigma_l, data_count, characteristic='Nominal'
+    ):
+        """Calculate tolerance, tighten, and K metrics from final output limits."""
+        def valid(value):
+            return value is not None and pd.notna(value) and np.isfinite(float(value))
+
+        original_tolerance = np.nan
+        new_tolerance = np.nan
+        diff_ratio = np.nan
+        tighten_threshold = np.nan
+        tighten_needed = False
+
+        if characteristic == 'Smaller':
+            if valid(original_ucl) and valid(suggest_ucl) and valid(center):
+                original_tolerance = float(original_ucl) - float(center)
+                new_tolerance = float(suggest_ucl) - float(center)
+        elif characteristic == 'Bigger':
+            if valid(original_lcl) and valid(suggest_lcl) and valid(center):
+                original_tolerance = float(center) - float(original_lcl)
+                new_tolerance = float(center) - float(suggest_lcl)
+        elif all(valid(v) for v in (
+            original_ucl, original_lcl, suggest_ucl, suggest_lcl
+        )):
+            original_tolerance = float(original_ucl) - float(original_lcl)
+            new_tolerance = float(suggest_ucl) - float(suggest_lcl)
+
+        if original_tolerance > 1e-9 and new_tolerance > 1e-9:
+            tighten_needed, diff_ratio, tighten_threshold = (
+                self.check_tighten_with_details(
+                    original_tolerance, new_tolerance, data_count
+                )
+            )
+
+        original_ucl_k = np.nan
+        original_lcl_k = np.nan
+        suggest_ucl_k = np.nan
+        suggest_lcl_k = np.nan
+        if valid(center):
+            if valid(sigma_u) and float(sigma_u) > 1e-9:
+                if valid(original_ucl):
+                    original_ucl_k = (
+                        float(original_ucl) - float(center)
+                    ) / float(sigma_u)
+                if valid(suggest_ucl):
+                    suggest_ucl_k = (
+                        float(suggest_ucl) - float(center)
+                    ) / float(sigma_u)
+            if valid(sigma_l) and float(sigma_l) > 1e-9:
+                if valid(original_lcl):
+                    original_lcl_k = (
+                        float(center) - float(original_lcl)
+                    ) / float(sigma_l)
+                if valid(suggest_lcl):
+                    suggest_lcl_k = (
+                        float(center) - float(suggest_lcl)
+                    ) / float(sigma_l)
+
+        if characteristic == 'Smaller':
+            ori_k_set = original_ucl_k
+            sug_k_set = suggest_ucl_k
+        elif characteristic == 'Bigger':
+            ori_k_set = original_lcl_k
+            sug_k_set = suggest_lcl_k
+        else:
+            original_ks = [v for v in (original_ucl_k, original_lcl_k) if pd.notna(v)]
+            suggest_ks = [v for v in (suggest_ucl_k, suggest_lcl_k) if pd.notna(v)]
+            ori_k_set = max(original_ks) if original_ks else np.nan
+            sug_k_set = max(suggest_ks) if suggest_ks else np.nan
+
+        return {
+            'TightenNeeded': tighten_needed,
+            'Original_Tolerance': original_tolerance,
+            'New_Tolerance': new_tolerance,
+            'Diff_Ratio_%': diff_ratio,
+            'Tighten_Threshold_%': tighten_threshold,
+            'Original_UCL_K_Set': original_ucl_k,
+            'Original_LCL_K_Set': original_lcl_k,
+            'Suggest_UCL_K_Set': suggest_ucl_k,
+            'Suggest_LCL_K_Set': suggest_lcl_k,
+            'Ori_K_Set': ori_k_set,
+            'Sug_K_Set': sug_k_set,
+        }
+
+    def is_discrete_data(self, values):
+        """Use the same discrete/continuous rule as the chart application."""
+        clean_values = np.asarray(values, dtype=float)
+        clean_values = clean_values[np.isfinite(clean_values)]
+        total_count = len(clean_values)
+        if total_count == 0:
+            return False
+
+        unique_count = len(np.unique(clean_values))
+        unique_ratio = unique_count / total_count
+        condition1 = unique_ratio <= (1 / 3) and unique_count <= 5
+        condition2 = total_count >= 30 and unique_count <= 10
+        return condition1 or condition2
+
+    def prepare_pattern_and_outliers(self, values, resolution=None):
+        """Prepare pattern data and filter outliers without Johnson for discrete data."""
+        original = np.asarray(values, dtype=float)
+
+        if self.is_discrete_data(original):
+            print("    [Data Type] Discrete: skip Johnson; use original-scale Robust Z > 4.5")
+            filtered = self.filter_original_by_robust_z(original, threshold=4.5)
+            pattern, skew_value, cb_value = self.pattern_diagnosis(filtered, resolution)
+            return filtered, filtered, pattern, skew_value, cb_value
+
+        values_for_pattern = self.data_prep_for_pattern(original)
+        pattern, skew_value, cb_value = self.pattern_diagnosis(
+            values_for_pattern, resolution
+        )
+        filtered = self.outlier_filter(original, pattern)
+        return values_for_pattern, filtered, pattern, skew_value, cb_value
+
     def compute_CB(self, values):
         """標準 Bimodality Coefficient (BC)"""
         N = len(values)
@@ -274,7 +429,11 @@ class CLTightenCalculator:
             return 0 
         sk = skew(values, bias=False)
         ku = kurtosis(values, fisher=True, bias=False)
-        return (sk**2 + 1) / (ku+3)
+        finite_sample_normal_kurtosis = 3 * (N - 1) ** 2 / ((N - 2) * (N - 3))
+        denominator = ku + finite_sample_normal_kurtosis
+        if not np.isfinite(sk) or not np.isfinite(denominator) or denominator <= 0:
+            return 0
+        return (sk**2 + 1) / denominator
 
     def compute_robust_sigma(self, values):
         """SOP 4.1: 依資料筆數計算 UR/LR (Robust Sigma)"""
@@ -314,6 +473,8 @@ class CLTightenCalculator:
         否則使用預設的最近2年
         """
         df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+        df[value_col] = pd.to_numeric(df[value_col], errors='coerce')
+        df[value_col] = df[value_col].replace([np.inf, -np.inf], np.nan)
         
         # 判斷是否使用自訂日期範圍
         if self.start_date is not None and self.end_date is not None:
@@ -496,8 +657,8 @@ class CLTightenCalculator:
                 y, transform_type = transform_johnson_slifker_shapiro_full(w)
                 print(f"    [Debug] 使用 {transform_type} 轉換方法")
             except Exception as e:
-                print(f"    [Debug] 轉換失敗，使用原始數據: {e}")
-                y = w  # 若連 Rank 都失敗(極少見)，回退原數據
+                print(f"    [Debug] Johnson 失敗，原始資料直接做 Robust Z > 4.5 濾除: {e}")
+                return self.filter_original_by_robust_z(values, threshold=4.5)
                 
             # SOP 2.4: Robust Z-score
             z = self.robust_zscore_sop2(y)
@@ -696,8 +857,8 @@ class CLTightenCalculator:
                     print(f"    [Debug-Johnson] 使用 {transform_type} 轉換方法")
                     print(f"    [Debug-Johnson] y (Z-score) 範圍 = [{np.min(y):.4f}, {np.max(y):.4f}]")
                 except Exception as e:
-                    print(f"    [Error-Johnson] Johnson 轉換失敗: {e}，回退到原始 w")
-                    y = w
+                    print(f"    [Error-Johnson] Johnson 失敗，原始資料直接做 Robust Z > 4.5 濾除: {e}")
+                    return self.filter_original_by_robust_z(values, threshold=4.5)
                 
                 # ========== Step 3: Robust Z-score (SOP 2.4) ==========
                 print(f"\n    Step 3: Robust Z-score 計算")
@@ -829,7 +990,7 @@ class CLTightenCalculator:
         """SOP 5.1 & 5.3: 計算 UCL/LCL"""
         N = len(values)
         if N < 4: 
-            return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
+            return (np.nan,) * 8
             
         median_val = np.median(values)
         mean_val = np.mean(values)
@@ -935,6 +1096,32 @@ class CLTightenCalculator:
             # Continuous 模式 (Normal, Skew-Right, Skew-Left, Bimodal)：每次 0.25σ
             adj_u = 0.25 * sigma_u
             adj_l = 0.25 * sigma_l
+
+        resolution_based = pattern in ["Near Constant", "Attribute"]
+        if resolution_based:
+            valid_resolution = (
+                resolution is not None
+                and np.isfinite(resolution)
+                and resolution > 0
+            )
+            max_retreat_u = max_retreat_l = (
+                max_adj_units * resolution if valid_resolution else 0.0
+            )
+            retreat_unit_name = "Resolution"
+        else:
+            safe_sigma_u = (
+                sigma_est_u
+                if np.isfinite(sigma_est_u) and sigma_est_u > 0
+                else 0.0
+            )
+            safe_sigma_l = (
+                sigma_est_l
+                if np.isfinite(sigma_est_l) and sigma_est_l > 0
+                else 0.0
+            )
+            max_retreat_u = max_adj_units * safe_sigma_u
+            max_retreat_l = max_adj_units * safe_sigma_l
+            retreat_unit_name = "Sigma"
         
         print(f"    [Debug OOC] 調整量 adj_u: {adj_u:.6f}, adj_l: {adj_l:.6f}")
             
@@ -1015,9 +1202,9 @@ class CLTightenCalculator:
                 # 計算退格後的累積量
                 cumulative_adj_u = (current_UCL + adj_u) - initial_UCL
                 
-                # 檢查是否超過 +2σ
-                if cumulative_adj_u > 2 * sigma_est_u:
-                    print(f"    [Debug] 迭代 {i+1}: UCL 累積退格 {cumulative_adj_u:.4f} 超過 +2σ ({2*sigma_est_u:.4f})，停止調整")
+                # 上限依資料型態使用 max_adj_units × Resolution 或 Sigma。
+                if cumulative_adj_u > max_retreat_u:
+                    print(f"    [Debug] 迭代 {i+1}: UCL 累積退格 {cumulative_adj_u:.4f} 超過 +{max_adj_units} {retreat_unit_name} ({max_retreat_u:.4f})，停止調整")
                     should_stop = True
                 else:
                     current_UCL += adj_u
@@ -1030,9 +1217,9 @@ class CLTightenCalculator:
                 # 計算退格後的累積量
                 cumulative_adj_l = initial_LCL - (current_LCL - adj_l)
                 
-                # 檢查是否超過 -2σ
-                if cumulative_adj_l > 2 * sigma_est_l:
-                    print(f"    [Debug] 迭代 {i+1}: LCL 累積退格 {cumulative_adj_l:.4f} 超過 -2σ ({2*sigma_est_l:.4f})，停止調整")
+                # 上限依資料型態使用 max_adj_units × Resolution 或 Sigma。
+                if cumulative_adj_l > max_retreat_l:
+                    print(f"    [Debug] 迭代 {i+1}: LCL 累積退格 {cumulative_adj_l:.4f} 超過 -{max_adj_units} {retreat_unit_name} ({max_retreat_l:.4f})，停止調整")
                     should_stop = True
                 else:
                     current_LCL -= adj_l
@@ -1054,16 +1241,16 @@ class CLTightenCalculator:
                 print(f"    [Debug OOC] 迭代 {i+1}: 有效 OOC = 0，停止調整")
                 break
         
-        # 最終硬性限制：確保 Suggest CL 不超過 Static CL ± 2σ
-        max_ucl_allowed = initial_UCL + 2 * sigma_est_u
-        min_lcl_allowed = initial_LCL - 2 * sigma_est_l
+        # 最終硬性限制使用與迭代相同的單位與 max_adj_units。
+        max_ucl_allowed = initial_UCL + max_retreat_u
+        min_lcl_allowed = initial_LCL - max_retreat_l
         
         if current_UCL > max_ucl_allowed:
-            print(f"    [Warning] UCL 超過 Static+2σ 上限 ({current_UCL:.4f} > {max_ucl_allowed:.4f})，強制限制")
+            print(f"    [Warning] UCL 超過 Static+{max_adj_units} {retreat_unit_name} 上限 ({current_UCL:.4f} > {max_ucl_allowed:.4f})，強制限制")
             current_UCL = max_ucl_allowed
         
         if current_LCL < min_lcl_allowed:
-            print(f"    [Warning] LCL 超過 Static-2σ 下限 ({current_LCL:.4f} < {min_lcl_allowed:.4f})，強制限制")
+            print(f"    [Warning] LCL 超過 Static-{max_adj_units} {retreat_unit_name} 下限 ({current_LCL:.4f} < {min_lcl_allowed:.4f})，強制限制")
             current_LCL = min_lcl_allowed
 
         # SOP 6.3: 最終 CL 根據 resolution 修正
@@ -1202,11 +1389,9 @@ class CLTightenCalculator:
             original_lcl = df['LCL'].iloc[0] if 'LCL' in df.columns and len(df)>0 else np.nan
             
             # 計算 Ori OOC Count
-            ori_ooc_count = 0
-            if not (pd.isna(original_ucl) or pd.isna(original_lcl)):
-                ori_upper_ooc = np.sum(values_orig > original_ucl)
-                ori_lower_ooc = np.sum(values_orig < original_lcl)
-                ori_ooc_count = ori_upper_ooc + ori_lower_ooc
+            ori_ooc_count = self.count_ooc(
+                values_orig, original_ucl, original_lcl, characteristic
+            )
             
             return {
                 "Pattern": "Insufficient Data",
@@ -1428,11 +1613,9 @@ class CLTightenCalculator:
                     print(f"    [Debug] 未知 Hard Rule 類型但無原始管制線，TightenNeeded = Yes")
             
             # 計算 Ori OOC Count (使用原始管制線)
-            ori_ooc_count = 0
-            if not (pd.isna(original_ucl) or pd.isna(original_lcl)):
-                ori_upper_ooc = np.sum(values_orig > original_ucl)
-                ori_lower_ooc = np.sum(values_orig < original_lcl)
-                ori_ooc_count = ori_upper_ooc + ori_lower_ooc
+            ori_ooc_count = self.count_ooc(
+                values_orig, original_ucl, original_lcl, characteristic
+            )
             
             # 📐 [Bug Fix] Hard Rule 與 SOP 6.6 的邏輯衝突檢查
             # 確保 Hard Rule 也遵守「只能收緊、不能放寬」原則
@@ -1503,9 +1686,9 @@ class CLTightenCalculator:
                     )
 
             # 使用最終（含 resolution 與 clamp）管制線重新計算 OOC。
-            static_upper_ooc = np.sum(values_orig > suggest_ucl_hr)
-            static_lower_ooc = np.sum(values_orig < suggest_lcl_hr)
-            static_ooc_count = static_upper_ooc + static_lower_ooc
+            static_ooc_count = self.count_ooc(
+                values_orig, suggest_ucl_hr, suggest_lcl_hr, characteristic
+            )
             
             # Hard Rule 不做小數位取整；resolution 僅用於上述明確的向外擴張。
             print(f"\n    [Hard Rule Return] Pattern: {rule_applied_name}")
@@ -1554,13 +1737,17 @@ class CLTightenCalculator:
         print(f"    [Debug] 原始數據點數量: {len(values_orig)}")
         print(f"    [Debug] 原始數據範圍: {np.min(values_orig):.4f} ~ {np.max(values_orig):.4f}")
         
-        values_for_pattern = self.data_prep_for_pattern(values_orig)
+        (
+            values_for_pattern,
+            values_filtered,
+            pattern,
+            skew_value,
+            cb_value,
+        ) = self.prepare_pattern_and_outliers(values_orig, resolution)
         print(f"    [Debug] 預處理後數據點數量: {len(values_for_pattern)}")
         
-        pattern, skew_value, cb_value = self.pattern_diagnosis(values_for_pattern, resolution)
         print(f"    [Debug] 診斷出的模式: {pattern}, Skew: {skew_value:.4f}, CB: {cb_value:.4f}")
         
-        values_filtered = self.outlier_filter(values_orig, pattern)
         N_filtered = len(values_filtered)
         print(f"    [Debug] 過濾後數據點數量: {N_filtered}")
         if N_filtered > 0:
@@ -1569,7 +1756,12 @@ class CLTightenCalculator:
             print(f"    [Debug] 過濾後數據為空!")
         
         # 檢查過濾後的數據是否為空
-        if N_filtered == 0:
+        if N_filtered < 4:
+            filtered_status = (
+                "No Data After Filter"
+                if N_filtered == 0
+                else "Insufficient Data After Filter"
+            )
             print(f"    [Warning] 過濾後沒有有效數據點，跳過計算")
             
             # 讀取必要參數
@@ -1578,14 +1770,12 @@ class CLTightenCalculator:
             original_lcl = df['LCL'].iloc[0] if 'LCL' in df.columns and len(df)>0 else np.nan
             
             # 計算 Ori OOC Count (使用原始數據，即使過濾後為空)
-            ori_ooc_count = 0
-            if not (pd.isna(original_ucl) or pd.isna(original_lcl)):
-                ori_upper_ooc = np.sum(values_orig > original_ucl)
-                ori_lower_ooc = np.sum(values_orig < original_lcl)
-                ori_ooc_count = ori_upper_ooc + ori_lower_ooc
+            ori_ooc_count = self.count_ooc(
+                values_orig, original_ucl, original_lcl, characteristic
+            )
             
             return {
-                "Pattern": "No Data After Filter",
+                "Pattern": filtered_status,
                 "Skew": np.nan,
                 "CB": np.nan,
                 "Resolution_Estimated": resolution,
@@ -1600,7 +1790,7 @@ class CLTightenCalculator:
                 "TightenNeeded": False,
                 "TotalDataCount": len(values_orig),
                 "DataCountUsed": N_filtered,
-                "HardRule": "No Data After Filter",
+                "HardRule": filtered_status,
                 "DetectionLimit": detection_limit,
                 "CL_Center": np.nan,
                 "Sigma_Est": 0.0,
@@ -1685,11 +1875,9 @@ class CLTightenCalculator:
             sigma_est_output = 0.0 
 
         # 計算 Ori OOC Count (使用原始管制線)
-        ori_ooc_count = 0
-        if not (pd.isna(original_ucl) or pd.isna(original_lcl)):
-            ori_upper_ooc = np.sum(values_orig > original_ucl)
-            ori_lower_ooc = np.sum(values_orig < original_lcl)
-            ori_ooc_count = ori_upper_ooc + ori_lower_ooc
+        ori_ooc_count = self.count_ooc(
+            values_orig, original_ucl, original_lcl, characteristic
+        )
 
         # 6. Control Limit Adjustment (SOP 6.1/6.2/6.3/6.5)
         # 使用原始數據 (values_orig) 來計算 OOC count，而不是過濾後的數據
@@ -1803,19 +1991,13 @@ class CLTightenCalculator:
         print(f"    [Debug Final OOC] === 重新計算 Final_OOC_Count (基於最終 Suggest UCL/LCL) ===")
         print(f"    [Debug Final OOC] 最終 Suggest UCL: {UCL_suggest:.6f}, LCL: {LCL_suggest:.6f}")
         
-        final_upper_ooc = np.sum(values_orig > UCL_suggest)
-        final_lower_ooc = np.sum(values_orig < LCL_suggest)
-        
-        # 根據特性計算最終有效的 OOC
-        if characteristic == 'Smaller':
-            final_ooc_count = final_upper_ooc
-            print(f"    [Debug Final OOC] Smaller 特性：只計算上界 OOC = {final_ooc_count}")
-        elif characteristic == 'Bigger':
-            final_ooc_count = final_lower_ooc
-            print(f"    [Debug Final OOC] Bigger 特性：只計算下界 OOC = {final_ooc_count}")
-        else:
-            final_ooc_count = final_upper_ooc + final_lower_ooc
-            print(f"    [Debug Final OOC] Nominal 特性：上界 {final_upper_ooc} + 下界 {final_lower_ooc} = {final_ooc_count}")
+        final_ooc_count = self.count_ooc(
+            values_orig, UCL_suggest, LCL_suggest, characteristic
+        )
+        print(
+            f"    [Debug Final OOC] {characteristic} 有效 OOC = "
+            f"{final_ooc_count}"
+        )
 
         # 7. Tighten 判定 (SOP 6.4) 
         tighten_flag = False
@@ -1921,7 +2103,9 @@ class CLTightenCalculator:
 
             # --- 如果有被縮回，重新計算 OOC 點數 ---
             if modified:
-                final_ooc_count = np.sum((values_orig > UCL_suggest + eps) | (values_orig < LCL_suggest - eps))
+                final_ooc_count = self.count_ooc(
+                    values_orig, UCL_suggest, LCL_suggest, characteristic
+                )
                 
                 # 重新計算 Tolerance 比對
                 if characteristic == 'Nominal':
@@ -1963,6 +2147,38 @@ class CLTightenCalculator:
             print(f"    [Precision Lock] 跳過（Resolution 無效）")
         
         print(f"    [Precision Lock] === 精度鎖定完成 ===\n")
+
+        # Derive every reported metric from the final, precision-locked limits.
+        final_metrics = self.calculate_output_limit_metrics(
+            original_ucl,
+            original_lcl,
+            UCL_suggest,
+            LCL_suggest,
+            cl_center,
+            sigma_est_u,
+            sigma_est_l,
+            N_filtered,
+            characteristic,
+        )
+        tighten_flag = final_metrics['TightenNeeded']
+        original_tol = final_metrics['Original_Tolerance']
+        new_tol = final_metrics['New_Tolerance']
+        diff_ratio = final_metrics['Diff_Ratio_%']
+        tighten_threshold = final_metrics['Tighten_Threshold_%']
+        original_ucl_k_set = final_metrics['Original_UCL_K_Set']
+        original_lcl_k_set = final_metrics['Original_LCL_K_Set']
+        suggest_ucl_k_set = final_metrics['Suggest_UCL_K_Set']
+        suggest_lcl_k_set = final_metrics['Suggest_LCL_K_Set']
+        ori_k_set = final_metrics['Ori_K_Set']
+        sug_k_set = final_metrics['Sug_K_Set']
+
+        # 所有 capping、單邊覆寫與精度修正完成後，再以輸出管制線統一計數。
+        static_ooc_count = self.count_ooc(
+            values_orig, UCL_static, LCL_static, characteristic
+        )
+        final_ooc_count = self.count_ooc(
+            values_orig, UCL_suggest, LCL_suggest, characteristic
+        )
         
         return {
             "Pattern": pattern,
@@ -2208,6 +2424,9 @@ class CLTightenCalculator:
             ax.set_xticklabels(tick_labels, rotation=90, ha='center', fontsize=9)  # rotation=90 垂直顯示
 
         y = chart_data['value'].values
+        characteristic = chart_info.get('Characteristics', 'Nominal')
+        show_upper_limit = characteristic != 'Bigger'
+        show_lower_limit = characteristic != 'Smaller'
         
         # 所有模式統一繪製：藍色連線
         ax.plot(x, y, 'bo-', markersize=3, linewidth=1, alpha=0.8, antialiased=True)
@@ -2238,13 +2457,14 @@ class CLTightenCalculator:
             ax.axhline(y=chart_info['Target'], color='gray', linestyle='-', linewidth=1)
         
         # 只在差距不大時顯示 Ori UCL/LCL
-        if not show_only_sug:
+        if not show_only_sug and show_upper_limit:
             ax.axhline(y=chart_info['UCL'], color='red', linestyle='--', linewidth=2)
+        if not show_only_sug and show_lower_limit:
             ax.axhline(y=chart_info['LCL'], color='red', linestyle='--', linewidth=2)
 
-        if not np.isnan(suggest_ucl):
+        if show_upper_limit and not np.isnan(suggest_ucl):
             ax.axhline(y=suggest_ucl, color='#555555', linestyle='-', linewidth=1.5)
-        if not np.isnan(suggest_lcl):
+        if show_lower_limit and not np.isnan(suggest_lcl):
             ax.axhline(y=suggest_lcl, color='#555555', linestyle='-', linewidth=1.5)
 
         # TSMC 管制線（綠色虛線）
@@ -2257,15 +2477,23 @@ class CLTightenCalculator:
 
         # ======= 標題 =======
         # 使用計算結果的 pattern，而非 Excel 的 ExpectedPattern
-        sug_ucl_text = f"Sug_UCL: {suggest_ucl}" if not np.isnan(suggest_ucl) else "Sug_UCL: N/A"
-        sug_lcl_text = f"Sug_LCL: {suggest_lcl}" if not np.isnan(suggest_lcl) else "Sug_LCL: N/A"
+        title_limits = []
+        if show_upper_limit:
+            title_limits.append(
+                f"Sug_UCL: {suggest_ucl}" if not np.isnan(suggest_ucl) else "Sug_UCL: N/A"
+            )
+        if show_lower_limit:
+            title_limits.append(
+                f"Sug_LCL: {suggest_lcl}" if not np.isnan(suggest_lcl) else "Sug_LCL: N/A"
+            )
+        suggest_text = " | ".join(title_limits)
         
         # 將點數統計拆開顯示：Total Cnt (兩年內總點數) 和 Cal Cnt (實際計算點數)
         total_cnt = total_data_count if total_data_count is not None else len(chart_data)
         used_cnt = used_data_count if used_data_count is not None else len(chart_data)
         
         title = (f"{chart_info['GroupName']}@{chart_info['ChartName']}@{chart_info['Characteristics']}\n"
-                f"Pattern: {pattern} | Total Cnt: {total_cnt} | Cal Cnt: {used_cnt} | {sug_ucl_text} | {sug_lcl_text}")
+                f"Pattern: {pattern} | Total Cnt: {total_cnt} | Cal Cnt: {used_cnt} | {suggest_text}")
         ax.set_title(title, fontsize=11)
         ax.grid(False)
 
@@ -2279,9 +2507,38 @@ class CLTightenCalculator:
             data_range = y_data_max - y_data_min
             if data_range < 1e-6:  # 幾乎是常數
                 center = (y_data_min + y_data_max) / 2
-                margin = max(abs(center) * 0.1, 1.0)  # 至少 1 個單位的範圍
-                y_data_min = center - margin
-                y_data_max = center + margin
+                visible_values = [center]
+                if show_upper_limit:
+                    visible_values.append(suggest_ucl)
+                    if not show_only_sug:
+                        visible_values.append(chart_info['UCL'])
+                if show_lower_limit:
+                    visible_values.append(suggest_lcl)
+                    if not show_only_sug:
+                        visible_values.append(chart_info['LCL'])
+                visible_values = [
+                    float(value) for value in visible_values
+                    if value is not None
+                    and pd.notna(value)
+                    and np.isfinite(float(value))
+                ]
+                resolution_value = pd.to_numeric(
+                    pd.Series([chart_info.get('Resolution', np.nan)]),
+                    errors='coerce'
+                ).iloc[0]
+                resolution_margin = (
+                    2 * float(resolution_value)
+                    if pd.notna(resolution_value) and resolution_value > 0
+                    else 0.0
+                )
+                visible_span = max(visible_values) - min(visible_values)
+                padding = max(
+                    visible_span * 0.15,
+                    resolution_margin,
+                    max(abs(center) * 0.001, 1e-6),
+                )
+                y_data_min = min(visible_values) - padding
+                y_data_max = max(visible_values) + padding
             print(f"[{pattern}] 包含所有點，Y 軸範圍: [{y_data_min:.3f}, {y_data_max:.3f}]")
         else:
             # 一般模式：使用四分位數法排除極端值
@@ -2309,13 +2566,22 @@ class CLTightenCalculator:
         # 根據是否只顯示 Sug 來決定包含哪些線
         if show_only_sug:
             # 只顯示 Sug 時，不包含 Ori UCL/LCL
-            for v in [suggest_ucl, suggest_lcl]:
+            visible_suggestions = []
+            if show_upper_limit:
+                visible_suggestions.append(suggest_ucl)
+            if show_lower_limit:
+                visible_suggestions.append(suggest_lcl)
+            for v in visible_suggestions:
                 if not np.isnan(v):
                     all_lines.append(v)
         else:
             # 正常情況，包含所有線
-            all_lines.extend([chart_info['UCL'], chart_info['LCL']])
-            for v in [suggest_ucl, suggest_lcl]:
+            visible_limits = []
+            if show_upper_limit:
+                visible_limits.extend([chart_info['UCL'], suggest_ucl])
+            if show_lower_limit:
+                visible_limits.extend([chart_info['LCL'], suggest_lcl])
+            for v in visible_limits:
                 if not np.isnan(v):
                     all_lines.append(v)
         
@@ -2348,16 +2614,16 @@ class CLTightenCalculator:
         
         # 收集所有UCL線的資訊
         ucl_lines = []
-        if not show_only_sug and not np.isnan(chart_info['UCL']):
+        if show_upper_limit and not show_only_sug and not np.isnan(chart_info['UCL']):
             ucl_lines.append(('Ori', chart_info['UCL'], 'red', 'normal'))
-        if not np.isnan(suggest_ucl):
+        if show_upper_limit and not np.isnan(suggest_ucl):
             ucl_lines.append(('Sug', suggest_ucl, 'black', 'bold'))
         
         # 收集所有LCL線的資訊
         lcl_lines = []
-        if not show_only_sug and not np.isnan(chart_info['LCL']):
+        if show_lower_limit and not show_only_sug and not np.isnan(chart_info['LCL']):
             lcl_lines.append(('Ori', chart_info['LCL'], 'red', 'normal'))
-        if not np.isnan(suggest_lcl):
+        if show_lower_limit and not np.isnan(suggest_lcl):
             lcl_lines.append(('Sug', suggest_lcl, 'black', 'bold'))
         
         # 處理UCL重疊
@@ -2436,9 +2702,39 @@ class CLTightenCalculator:
                 
                 annotations.append((value, f"{combined_label} = {value}", color, weight))
 
-        for y_val, text, color, weight in annotations:
-            ax.text(1.02, y_val, text, transform=ax.get_yaxis_transform(),
-                    color=color, fontsize=9, va='center', fontweight=weight, clip_on=False)
+        # Spread close labels vertically while keeping a connector to the true line.
+        y_min, y_max = ax.get_ylim()
+        y_span = max(y_max - y_min, 1e-9)
+        min_label_gap = y_span * 0.055
+        sorted_annotations = sorted(annotations, key=lambda item: item[0])
+        label_positions = []
+        for y_val, *_ in sorted_annotations:
+            label_y = float(y_val)
+            if label_positions:
+                label_y = max(label_y, label_positions[-1] + min_label_gap)
+            label_positions.append(label_y)
+
+        if label_positions and label_positions[-1] > y_max:
+            shift = label_positions[-1] - y_max
+            label_positions = [position - shift for position in label_positions]
+        if label_positions and label_positions[0] < y_min:
+            shift = y_min - label_positions[0]
+            label_positions = [position + shift for position in label_positions]
+
+        for (y_val, text, color, weight), label_y in zip(
+            sorted_annotations, label_positions
+        ):
+            if abs(label_y - y_val) > y_span * 0.005:
+                ax.plot(
+                    [1.0, 1.015], [y_val, label_y],
+                    transform=ax.get_yaxis_transform(),
+                    color=color, linewidth=0.7, clip_on=False
+                )
+            ax.text(
+                1.02, label_y, text, transform=ax.get_yaxis_transform(),
+                color=color, fontsize=9, va='center', fontweight=weight,
+                clip_on=False
+            )
 
         # ======= 輸出圖檔 - 只保存 PNG 格式 =======
         filename_png = os.path.join(output_dir, f"{chart_info['GroupName']}_{chart_info['ChartName']}.png")
@@ -2566,9 +2862,9 @@ class CLTightenCalculator:
             final_output.update(results)
             final_output['Status'] = 'Success'
             
-            # 讓舊 UCL/LCL 欄位仍為 Suggest 的值
-            final_output['Original UCL'] = final_output['Suggest UCL']
-            final_output['Original LCL'] = final_output['Suggest LCL']
+            # Original 欄位必須保留 Chart 原始設定，不能填入計算後的 Suggest。
+            final_output['Original UCL'] = chart_info_row.get('UCL', np.nan)
+            final_output['Original LCL'] = chart_info_row.get('LCL', np.nan)
             
             # � [最終精度檢查] 二次確認：確保所有輸出值都符合 Resolution
             res_val = results.get('Resolution_Estimated')
@@ -2589,8 +2885,10 @@ class CLTightenCalculator:
                 print(f"    [最終精度檢查] 目標小數位數: {target_decimals}")
                 
                 # ✅ 只對計算產生的 CL 值進行二次確認（不包含 Target/USL/LSL）
-                cl_cols_to_check = ['Suggest UCL', 'Suggest LCL', 'Static UCL', 'Static LCL', 
-                                   'Original UCL', 'Original LCL', 'CL_Center']
+                cl_cols_to_check = [
+                    'Suggest UCL', 'Suggest LCL',
+                    'Static UCL', 'Static LCL', 'CL_Center'
+                ]
                 
                 precision_issues_found = False
                 
