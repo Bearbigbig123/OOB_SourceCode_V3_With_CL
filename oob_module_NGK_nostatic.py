@@ -3408,6 +3408,7 @@ def save_results_to_excel(results_df, scale_factor=0.3):
 # 🔧 封裝路徑處理函式
 def resource_path(relative_path):
     if getattr(sys, 'frozen', False):  # 如果是打包環境
+        # Always read customer-maintained resources beside the executable.
         base_path = os.path.dirname(sys.executable)
     else:  # 開發環境
         base_path = os.path.abspath(".")
