@@ -1,6 +1,7 @@
 import pandas as pd
 from customer_filter import apply_customer_filter
 from chart_filter import filter_chart_information
+from raw_data_io import find_matching_raw_data_file, read_raw_data
 import numpy as np
 import os
 
@@ -2258,6 +2259,9 @@ class CLTightenCalculator:
         """根據命名規則匹配對應的 Raw Data CSV (用 _ 分割做精確匹配)"""
         group_name = str(group_name).strip()
         chart_name = str(chart_name).strip()
+        matched_path = find_matching_raw_data_file(raw_data_directory, group_name, chart_name)
+        if matched_path:
+            return matched_path
         
         # 構建精確匹配的前綴模式
         pattern_prefix = f"{group_name}_{chart_name}"
@@ -3043,7 +3047,7 @@ class CLTightenCalculator:
                 continue
 
             try:
-                raw_df = pd.read_csv(filepath, float_precision='round_trip')
+                raw_df = read_raw_data(filepath, float_precision='round_trip')
                 customer_result = apply_customer_filter(raw_df, self.selected_customers)
                 if customer_result.missing_column or customer_result.data.empty:
                     result = chart_info.to_dict()

@@ -6,12 +6,16 @@ from PyQt6 import QtWidgets, QtCore, QtGui
 import pickle # Import pickle module for deep copying
 # Translation System
 from translations import get_translator, tr
+from raw_data_io import find_matching_raw_data_file, read_raw_data
 
 logger = logging.getLogger(__name__)
 
 
 def _find_raw_csv_for_chart(directory, group_name, chart_name):
     """在 raw_data 目錄中尋找對應 GroupName/ChartName 的 CSV 檔案"""
+    matched_path = find_matching_raw_data_file(directory, group_name, chart_name)
+    if matched_path:
+        return matched_path
     group_name = str(group_name)
     chart_name = str(chart_name)
     pattern = re.compile(rf"{re.escape(group_name)}_{re.escape(chart_name)}(?:_\d+_\d+)?\.csv$")
@@ -728,7 +732,7 @@ class ToolMatchingWidget(QtWidgets.QWidget):
                 skipped.append(f"{group_name}/{chart_name}（找不到原始檔）")
                 continue
             try:
-                raw_df = pd.read_csv(csv_path)
+                raw_df = read_raw_data(csv_path)
             except Exception as e:
                 skipped.append(f"{group_name}/{chart_name}（讀取失敗: {e}）")
                 continue

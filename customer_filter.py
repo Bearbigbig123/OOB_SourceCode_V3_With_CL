@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import glob
-import os
 from dataclasses import dataclass
 from typing import Iterable
 
 import pandas as pd
+from raw_data_io import iter_raw_data_files, read_raw_data
 
 
 CUSTOMER_COLUMN = "Customer"
@@ -30,13 +29,12 @@ def discover_customers(raw_data_directory: str) -> tuple[list[str], list[str]]:
     """Return sorted unique customers and files that could not be inspected."""
     customers: set[str] = set()
     errors: list[str] = []
-    pattern = os.path.join(raw_data_directory, "*.csv")
-    for path in glob.glob(pattern):
+    for path in iter_raw_data_files(raw_data_directory):
         try:
-            header = pd.read_csv(path, nrows=0)
+            header = read_raw_data(path, nrows=0)
             if CUSTOMER_COLUMN not in header.columns:
                 continue
-            values = pd.read_csv(path, usecols=[CUSTOMER_COLUMN])[CUSTOMER_COLUMN]
+            values = read_raw_data(path, usecols=[CUSTOMER_COLUMN])[CUSTOMER_COLUMN]
             customers.update(v for v in map(normalize_customer, values) if v is not None)
         except Exception:
             errors.append(path)

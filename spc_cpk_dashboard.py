@@ -10,6 +10,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import oob_module_NGK_nostatic as oob_module
 from customer_filter import apply_customer_filter
+from raw_data_io import read_raw_data
 from translations import tr
 
 class SlidingToggleSwitch(QtWidgets.QAbstractButton):
@@ -860,10 +861,13 @@ class SPCCpkDashboard(QtWidgets.QWidget):
 
     # === File Loading ===
     def load_csv(self):
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Select CSV File", "", "CSV Files (*.csv)")
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select Raw Data File", "",
+            "Raw Data Files (*.csv *.xlsx *.xls *.xlsm *.xlsb);;All Files (*.*)"
+        )
         if path:
             try:
-                self.data = pd.read_csv(path)
+                self.data = read_raw_data(path)
                 self.file_label.setText(f"Loaded: {os.path.basename(path)}")
             except Exception as e:
                 QtWidgets.QMessageBox.critical(self, "Error", f"Loading failed: {e}")
@@ -941,7 +945,7 @@ class SPCCpkDashboard(QtWidgets.QWidget):
             raw_path = oob_module.find_matching_file(raw_data_dir, group_name, chart_name)
             if raw_path and os.path.exists(raw_path):
                 try:
-                    raw_df = pd.read_csv(raw_path)
+                    raw_df = read_raw_data(raw_path)
                     if hasattr(self.parent_app, 'filter_customer_data'):
                         customer_result = self.parent_app.filter_customer_data(raw_df, os.path.basename(raw_path))
                     else:

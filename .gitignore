@@ -18,6 +18,8 @@ build/
 # PyInstaller output
 *.spec
 dist_pyinstaller/
+build_opensource_v4/
+dist_opensource_v4/
 
 # Input data (do not commit real data)
 input/

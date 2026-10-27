@@ -17,6 +17,7 @@ from CL_limit_class import CLTightenCalculator
 from translations import TranslationManager, get_translator, tr
 from customer_filter import apply_customer_filter, discover_customers
 from chart_filter import filter_chart_information
+from raw_data_io import read_raw_data
 # Excel 和圖片處理
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as OpenpyxlImage
@@ -83,6 +84,17 @@ OOB_CALCULATED = 'CALCULATED'
 OOB_INSUFFICIENT_DATA = 'INSUFFICIENT_DATA'
 OOB_ERROR = 'ERROR'
 
+KSHIFT_PERCENTILES = ('p95', 'p50', 'p05')
+KSHIFT_AUDIT_KEYS = tuple(
+    key
+    for percentile in KSHIFT_PERCENTILES
+    for key in (
+        f'weekly_k_{percentile}', f'weekly_k_{percentile}_abs',
+        f'rolling_k_{percentile}', f'rolling_k_{percentile}_abs',
+        f'k_{percentile}', f'k_{percentile}_abs',
+    )
+) + ('k_source',)
+
 
 def is_valid_number(value):
     """Return True only for a finite numeric value."""
@@ -94,7 +106,7 @@ def is_valid_number(value):
 
 def unavailable_kshift_result(status):
     """Build a K-shift result that cannot be mistaken for a normal result."""
-    return pd.Series({
+    result = {
         'P95_k': np.nan,
         'P50_k': np.nan,
         'P05_k': np.nan,
@@ -104,7 +116,12 @@ def unavailable_kshift_result(status):
         'P95_shift': status,
         'P50_shift': status,
         'P05_shift': status,
-    })
+        'k_source': 'N/A',
+    }
+    for key in KSHIFT_AUDIT_KEYS:
+        result.setdefault(key, np.nan)
+    result['k_source'] = 'N/A'
+    return pd.Series(result)
 
 
 def draw_horizontal_limit(plotter, value, label, x_min, x_max, fontsize=10):
@@ -227,7 +244,7 @@ class OOBSettingsDialog(QtWidgets.QDialog):
         
         self.setWindowTitle(tr("chart_processing_settings"))
         self.setMinimumWidth(720)
-        self.setMinimumHeight(520)
+        self.setMinimumHeight(620)
         self.setObjectName("OOBSettingsDialog")
         
         main_layout = QtWidgets.QVBoxLayout(self)
@@ -238,6 +255,26 @@ class OOBSettingsDialog(QtWidgets.QDialog):
         self.settings_intro_label.setObjectName("SettingsIntro")
         self.settings_intro_label.setWordWrap(True)
         main_layout.addWidget(self.settings_intro_label)
+
+        # === Raw data processing settings ===
+        self.data_processing_group = QtWidgets.QGroupBox(tr("data_processing_settings"))
+        self.data_processing_group.setObjectName("SettingsCard")
+        data_processing_layout = QtWidgets.QVBoxLayout(self.data_processing_group)
+        data_processing_layout.setSpacing(8)
+
+        self.round_by_resolution_checkbox = ToggleSwitch(
+            label_text=tr("round_raw_data_by_resolution")
+        )
+        self.round_by_resolution_checkbox.setChecked(False)
+        data_processing_layout.addWidget(self.round_by_resolution_checkbox)
+
+        self.round_by_resolution_help_label = QtWidgets.QLabel(
+            tr("round_raw_data_by_resolution_help")
+        )
+        self.round_by_resolution_help_label.setObjectName("SettingsHelp")
+        self.round_by_resolution_help_label.setWordWrap(True)
+        data_processing_layout.addWidget(self.round_by_resolution_help_label)
+        main_layout.addWidget(self.data_processing_group)
         
         # === 圖表顯示設定 ===
         display_group = QtWidgets.QGroupBox(tr("display_settings"))
@@ -518,6 +555,7 @@ class OOBSettingsDialog(QtWidgets.QDialog):
             'show_by_tool_charts': self.show_by_tool_checkbox.isChecked(),
             'show_by_customer_charts': self.show_by_customer_checkbox.isChecked(),
             'enable_record_high_low': self.record_high_low_checkbox.isChecked(),
+            'round_raw_data_by_resolution': self.round_by_resolution_checkbox.isChecked(),
             'custom_time_range_enabled': self.custom_time_range_checkbox.isChecked(),
             'start_time': self.start_datetime_edit.date(),
             'end_time': self.end_datetime_edit.date()
@@ -537,6 +575,9 @@ class OOBSettingsDialog(QtWidgets.QDialog):
             self.show_by_customer_checkbox.setChecked(settings['show_by_customer_charts'])
         self.record_high_low_checkbox.setChecked(
             settings.get('enable_record_high_low', False)
+        )
+        self.round_by_resolution_checkbox.setChecked(
+            settings.get('round_raw_data_by_resolution', False)
         )
         if 'custom_time_range_enabled' in settings:
             self.custom_time_range_checkbox.setChecked(settings['custom_time_range_enabled'])
@@ -569,6 +610,11 @@ class OOBSettingsDialog(QtWidgets.QDialog):
         self.oob_rule_group.setTitle(tr("oob_rule_settings"))
         self.record_high_low_checkbox.setText(tr("enable_record_high_low"))
         self.record_high_low_help_label.setText(tr("record_high_low_help"))
+        self.data_processing_group.setTitle(tr("data_processing_settings"))
+        self.round_by_resolution_checkbox.setText(tr("round_raw_data_by_resolution"))
+        self.round_by_resolution_help_label.setText(
+            tr("round_raw_data_by_resolution_help")
+        )
         self.settings_intro_label.setText(tr("oob_settings_intro"))
         self.custom_time_range_checkbox.setText(tr("enable_custom_time_range"))
         self.start_time_label.setText(tr("start_time"))
@@ -767,6 +813,39 @@ def format_and_clean_data(raw_df, chart_info):
             len(raw_df),
         )
     return raw_df
+
+
+def resolution_decimal_places(resolution):
+    """Return the number of displayed decimal places implied by Resolution."""
+    from decimal import Decimal, InvalidOperation
+
+    if not is_valid_number(resolution) or float(resolution) <= 0:
+        return None
+    try:
+        exponent = Decimal(str(resolution)).normalize().as_tuple().exponent
+    except (InvalidOperation, ValueError):
+        return None
+    return max(0, -exponent)
+
+
+def round_point_values_by_resolution(raw_df, resolution):
+    """Round point_val with decimal ROUND_HALF_UP using Resolution precision."""
+    from decimal import Decimal, ROUND_HALF_UP
+
+    decimal_places = resolution_decimal_places(resolution)
+    if decimal_places is None:
+        return raw_df.copy(), None
+
+    quantizer = Decimal('1').scaleb(-decimal_places)
+    rounded = raw_df.copy()
+    rounded['point_val'] = rounded['point_val'].map(
+        lambda value: float(
+            Decimal(str(value)).quantize(quantizer, rounding=ROUND_HALF_UP)
+        )
+    )
+    return rounded, decimal_places
+
+
 def update_chart_limits(raw_df, chart_info):
     import numpy as np
     # 排序並重設索引
@@ -795,8 +874,14 @@ def update_chart_limits(raw_df, chart_info):
 
 def exclude_oos_data(raw_df, chart_info):
     import pandas as pd
-    usl = raw_df['usl_val'].iat[0]
-    lsl = raw_df['lsl_val'].iat[0]
+    if raw_df.empty:
+        return raw_df
+    usl = chart_info.get('USL')
+    lsl = chart_info.get('LSL')
+    if not is_valid_number(usl) and 'usl_val' in raw_df.columns:
+        usl = raw_df['usl_val'].iat[0]
+    if not is_valid_number(lsl) and 'lsl_val' in raw_df.columns:
+        lsl = raw_df['lsl_val'].iat[0]
     characteristic = normalize_characteristic(chart_info.get('Characteristics'))
 
     # 單邊特性只使用有意義的規格側；另一側允許留空。
@@ -814,7 +899,48 @@ def exclude_oos_data(raw_df, chart_info):
     return raw_df  # 如果都沒有符合條件，則直接回傳原始資料
 
 # 優化後的 preprocess_data 函數
-def preprocess_data(chart_info, raw_df):
+def calculate_oos_statistics(data, chart_info):
+    """Count weekly values outside the active specification limits."""
+    values = pd.to_numeric(data['point_val'], errors='coerce')
+    characteristic = normalize_characteristic(chart_info.get('Characteristics'))
+    usl = chart_info.get('USL')
+    lsl = chart_info.get('LSL')
+
+    high_mask = pd.Series(False, index=data.index)
+    low_mask = pd.Series(False, index=data.index)
+    if characteristic in ('Nominal', 'Smaller', 'Sigma') and is_valid_number(usl):
+        high_mask = values > float(usl)
+    if characteristic in ('Nominal', 'Bigger') and is_valid_number(lsl):
+        low_mask = values < float(lsl)
+
+    high_count = int(high_mask.fillna(False).sum())
+    low_count = int(low_mask.fillna(False).sum())
+    total_count = high_count + low_count
+    valid_count = int(values.notna().sum())
+    return {
+        'oos_cnt': total_count,
+        'oos_high_cnt': high_count,
+        'oos_low_cnt': low_count,
+        'oos_rate': float(total_count) / valid_count if valid_count else np.nan,
+    }
+
+
+def prepare_oob_chart_data(raw_df, chart_info, weekly_start_date, weekly_end_date):
+    """Keep weekly OOS points visible while filtering OOS historical points."""
+    weekly_mask = (
+        (raw_df['point_time'] >= weekly_start_date)
+        & (raw_df['point_time'] <= weekly_end_date)
+    )
+    historical_data = exclude_oos_data(raw_df.loc[~weekly_mask].copy(), chart_info)
+    weekly_data = raw_df.loc[weekly_mask].copy()
+    return (
+        pd.concat([historical_data, weekly_data])
+        .sort_values('point_time')
+        .reset_index(drop=True)
+    )
+
+
+def preprocess_data(chart_info, raw_df, round_raw_data_by_resolution=False):
     try:
         chart_info = chart_info.copy()
         for column in ('USL', 'LSL', 'UCL', 'LCL', 'Target', 'Resolution'):
@@ -823,12 +949,27 @@ def preprocess_data(chart_info, raw_df):
         chart_info['Characteristics'] = normalize_characteristic(chart_info.get('Characteristics'))
 
         raw_df = format_and_clean_data(raw_df, chart_info)  # 確保這個函數已經是最佳化的
+
+        chart_info['raw_data_rounding_enabled'] = bool(round_raw_data_by_resolution)
+        chart_info['raw_data_rounding_decimal_places'] = np.nan
+        if round_raw_data_by_resolution:
+            raw_df, decimal_places = round_point_values_by_resolution(
+                raw_df, chart_info.get('Resolution')
+            )
+            if decimal_places is None:
+                logger.warning(
+                    "Raw data rounding skipped because Resolution is invalid: %r",
+                    chart_info.get('Resolution'),
+                )
+            else:
+                chart_info['raw_data_rounding_decimal_places'] = decimal_places
         
         if raw_df.empty:
             return False, None, None
         
         raw_df, chart_info = update_chart_limits(raw_df, chart_info)  # 確保這個函數已經是最佳化的
-        raw_df = exclude_oos_data(raw_df, chart_info)
+        # Preserve OOS rows until after the date split. Only baseline data is
+        # filtered; weekly data remains available for OOS counts and charts.
         
         # 保留必要欄位，如果有 Batch_ID 則保留
         columns_to_keep = ['point_val', 'point_time']
@@ -863,7 +1004,10 @@ def find_matching_file(directory, group_name, chart_name):
     chart_name = str(chart_name)
     
     # 預編譯正則表達式
-    pattern = re.compile(rf"{re.escape(group_name)}_{re.escape(chart_name)}(?:_\d+_\d+)?\.csv$")
+    pattern = re.compile(
+        rf"{re.escape(group_name)}_{re.escape(chart_name)}(?:_\d+_\d+)?(?:\.csv|\.xlsx|\.xls|\.xlsm|\.xlsb)$",
+        re.IGNORECASE,
+    )
     
     # 使用列表推導式來提高效率
     matching_files = [
@@ -887,6 +1031,97 @@ def get_percentiles(values):
         'P99.865': np.percentile(values, 99.865),
         'P0.135': np.percentile(values, 0.135)
     }
+
+
+def summarize_oob_values(values, prefix):
+    """Return audit-friendly count, distribution, and percentile fields."""
+    numeric = pd.to_numeric(pd.Series(values), errors='coerce')
+    numeric = numeric.replace([np.inf, -np.inf], np.nan).dropna()
+    summary = {
+        f'{prefix}_n': int(len(numeric)),
+        f'{prefix}_mean': np.nan,
+        f'{prefix}_sigma': np.nan,
+        f'{prefix}_p05': np.nan,
+        f'{prefix}_p50': np.nan,
+        f'{prefix}_p95': np.nan,
+    }
+    if numeric.empty:
+        return summary
+    summary[f'{prefix}_mean'] = float(numeric.mean())
+    summary[f'{prefix}_sigma'] = float(numeric.std(ddof=1)) if len(numeric) > 1 else 0.0
+    summary[f'{prefix}_p05'] = float(np.percentile(numeric, 5))
+    summary[f'{prefix}_p50'] = float(np.percentile(numeric, 50))
+    summary[f'{prefix}_p95'] = float(np.percentile(numeric, 95))
+    return summary
+
+
+def build_oob_audit_statistics(
+    weekly_values, baseline_values, kshift_results,
+    weekly_start, weekly_end, baseline_start, baseline_end,
+):
+    """Build the statistics shared by result export and every primary chart."""
+    audit = {}
+    audit.update(summarize_oob_values(weekly_values, 'weekly'))
+    audit.update(summarize_oob_values(baseline_values, 'baseline'))
+    audit.update({
+        'weekly_start': pd.to_datetime(weekly_start),
+        'weekly_end': pd.to_datetime(weekly_end),
+        'baseline_start': pd.to_datetime(baseline_start),
+        'baseline_end': pd.to_datetime(baseline_end),
+    })
+    for key in KSHIFT_AUDIT_KEYS:
+        audit[key] = kshift_results.get(key, np.nan)
+    return audit
+
+
+def _format_oob_value(value, decimals=3, signed=False):
+    if not is_valid_number(value):
+        return 'N/A'
+    format_spec = f"{'+' if signed else ''}.{decimals}f"
+    return format(float(value), format_spec)
+
+
+def add_oob_statistics_header(figure, chart_summary):
+    """Draw a compact percentile/K-shift matrix in the figure header."""
+    if not chart_summary:
+        return
+
+    # Keep the matrix centered and use fixed column anchors so labels and values
+    # remain aligned at every canvas size.
+    label_x = 0.320
+    column_x = (0.430, 0.550, 0.670)
+    row_y = {'header': 0.950, 'baseline': 0.885, 'weekly': 0.820, 'k': 0.755}
+    figure.text(label_x, row_y['header'], '', ha='left', va='center', fontsize=10)
+    for x, percentile in zip(column_x, ('P95', 'P50', 'P05')):
+        figure.text(x, row_y['header'], percentile, ha='center', va='center',
+                    fontsize=10, color='#475569', fontweight='bold')
+
+    for row_name, prefix, label in (
+        ('baseline', 'baseline', 'Baseline'),
+        ('weekly', 'weekly', 'Weekly'),
+    ):
+        figure.text(label_x, row_y[row_name], label, ha='right', va='center',
+                    fontsize=10, color='#475569')
+        for x, percentile in zip(column_x, ('p95', 'p50', 'p05')):
+            figure.text(
+                x, row_y[row_name],
+                _format_oob_value(chart_summary.get(f'{prefix}_{percentile}'), 2),
+                ha='center', va='center', fontsize=10, color='#334155',
+            )
+
+    source = chart_summary.get('k_source', 'Weekly')
+    source = source if source in ('Weekly', 'Rolling') else 'Weekly'
+    figure.text(label_x, row_y['k'], f'K {source}', ha='right', va='center',
+                fontsize=10, color='#475569', fontweight='bold')
+    for x, percentile in zip(column_x, ('p95', 'p50', 'p05')):
+        status = chart_summary.get(f'HL_{percentile.upper()}_shift')
+        color = '#DC2626' if status == 'HIGHLIGHT' else '#334155'
+        figure.text(
+            x, row_y['k'],
+            _format_oob_value(chart_summary.get(f'k_{percentile}'), 2, signed=True),
+            ha='center', va='center', fontsize=10, color=color,
+            fontweight='bold' if status == 'HIGHLIGHT' else 'normal',
+        )
 
 # 優化後的 rolling_calculation 函數
 def rolling_calculation(data_values, days_to_roll):
@@ -1111,6 +1346,9 @@ def kshift_sigma_ratio_calculator(base, data, characteristic, resolution, ucl, l
         'P50_shift': 'NO_HIGHLIGHT',
         'P05_shift': 'NO_HIGHLIGHT'
     }
+    for key in KSHIFT_AUDIT_KEYS:
+        results.setdefault(key, np.nan)
+    results['k_source'] = 'Weekly'
 
     print("--- 進入 kshift_sigma_ratio_calculator 函數 ---")
     # 這裡 base 和 data 應該是字典，包含 'values' 和 'percentiles' (如果已計算)
@@ -1360,6 +1598,13 @@ def kshift_sigma_ratio_calculator(base, data, characteristic, resolution, ucl, l
         results['P50_k'] = safe_division(np.round(abs(data_percentiles.get('P50', np.nan) - base_percentiles.get('P50', np.nan)), 8), p50k_deno)
         results['P05_k'] = safe_division(np.round(abs(data_percentiles.get('P05', np.nan) - base_percentiles.get('P05', np.nan)), 8), p05k_deno)
 
+        for percentile in ('P95', 'P50', 'P05'):
+            suffix = percentile.lower()
+            results[f'weekly_k_{suffix}'] = results[f'{percentile}_k_ori']
+            results[f'weekly_k_{suffix}_abs'] = results[f'{percentile}_k']
+            results[f'k_{suffix}'] = results[f'{percentile}_k_ori']
+            results[f'k_{suffix}_abs'] = results[f'{percentile}_k']
+
         if not all(is_valid_number(results[key]) for key in ('P95_k', 'P50_k', 'P05_k')):
             print("  kshift: K 值包含無效數值，標記為 ERROR。")
             return unavailable_kshift_result(OOB_ERROR)
@@ -1399,6 +1644,13 @@ def kshift_sigma_ratio_calculator(base, data, characteristic, resolution, ucl, l
                 'P50_k_ori': safe_division(np.round((rolled_data['percentiles'].get('P50', np.nan) - base_percentiles.get('P50', np.nan)), 8), p50k_deno),
                 'P05_k_ori': safe_division(np.round((rolled_data['percentiles'].get('P05', np.nan) - base_percentiles.get('P05', np.nan)), 8), p05k_deno),
             }
+            for percentile in ('P95', 'P50', 'P05'):
+                suffix = percentile.lower()
+                results[f'rolling_k_{suffix}'] = rolling_results[f'{percentile}_k_ori']
+                results[f'rolling_k_{suffix}_abs'] = rolling_results[f'{percentile}_k']
+                results[f'k_{suffix}'] = rolling_results[f'{percentile}_k_ori']
+                results[f'k_{suffix}_abs'] = rolling_results[f'{percentile}_k']
+            results['k_source'] = 'Rolling'
             print(f"  kshift: 計算出的 rolling_results: {rolling_results}")
 
             # 判斷滾動結果高亮條件
@@ -1704,6 +1956,8 @@ def discrete_oob_calculator(base_data, weekly_data, chart_info, raw_df=None,
         results['HL_P95_shift'] = kshift_results.get('P95_shift', 'NO_HIGHLIGHT')
         results['HL_P50_shift'] = kshift_results.get('P50_shift', 'NO_HIGHLIGHT')
         results['HL_P05_shift'] = kshift_results.get('P05_shift', 'NO_HIGHLIGHT')
+        for key in KSHIFT_AUDIT_KEYS:
+            results[key] = kshift_results.get(key, np.nan)
         
         # 5. 新增的 category_LT_Shift 計算
         print("  離散型 OOB: 計算 category_LT_Shift...")
@@ -2009,11 +2263,16 @@ def process_single_chart(
              print(f'未找到週數據, GroupName: {chart_info.get("group_name", "N/A")}, ChartName: {chart_info.get("chart_name", "N/A")}, 返回 None')
              return None
 
+        analysis_raw_df = prepare_oob_chart_data(
+            raw_df, chart_info, weekly_start_date, weekly_end_date
+        )
+
         # --- 基線數據範圍選擇邏輯開始 ---
 
         # 步驟 1: 使用初始的一年基線範圍過濾數據並計數
         print("  正在篩選初始一年基線數據...")
         baseline_data_one_year = raw_df[(raw_df['point_time'] >= initial_baseline_start_date) & (raw_df['point_time'] <= baseline_end_date)].copy() # Use copy()
+        baseline_data_one_year = exclude_oos_data(baseline_data_one_year, chart_info)
         baseline_count_one_year = len(baseline_data_one_year)
         print(f"  初始一年基線數據點數量: {baseline_count_one_year}")
 
@@ -2028,6 +2287,7 @@ def process_single_chart(
                 
             # 檢查擴展後的數量
             baseline_data_two_year = raw_df[(raw_df['point_time'] >= actual_baseline_start_date) & (raw_df['point_time'] <= baseline_end_date)].copy()
+            baseline_data_two_year = exclude_oos_data(baseline_data_two_year, chart_info)
             baseline_count_two_year = len(baseline_data_two_year)
             print(f"  擴展至兩年後基線數據點數量: {baseline_count_two_year}")
             
@@ -2043,6 +2303,7 @@ def process_single_chart(
         # 步驟 3: 使用最終確定的基線範圍過濾數據
         print("  正在篩選最終基線數據...")
         baseline_data = raw_df[(raw_df['point_time'] >= actual_baseline_start_date) & (raw_df['point_time'] <= baseline_end_date)].copy() # Use copy()
+        baseline_data = exclude_oos_data(baseline_data, chart_info)
         print(f"  篩選後 baseline_data shape (使用 {len(baseline_data)} 點從 {actual_baseline_start_date} 至 {baseline_end_date}): {baseline_data.shape}")
 
 
@@ -2130,7 +2391,7 @@ def process_single_chart(
 
         print("  正在呼叫 trending...")
         # trending 也需要使用實際確定後的基線範圍
-        trending_results = trending(raw_df, weekly_start_date, weekly_end_date, actual_baseline_start_date, baseline_end_date) if not baseline_insufficient and not baseline_empty else OOB_INSUFFICIENT_DATA
+        trending_results = trending(analysis_raw_df, weekly_start_date, weekly_end_date, actual_baseline_start_date, baseline_end_date) if not baseline_insufficient and not baseline_empty else OOB_INSUFFICIENT_DATA
         print(f"  trending 返回: {trending_results}")
 
         if enable_record_high_low:
@@ -2204,12 +2465,30 @@ def process_single_chart(
             'LCL': chart_info.get('LCL', 'N/A'),
             'Target': chart_info.get('Target', 'N/A'),
             'Resolution': chart_info.get('Resolution', 'N/A'),
+            'raw_data_rounding_enabled': chart_info.get('raw_data_rounding_enabled', False),
+            'raw_data_rounding_decimal_places': chart_info.get(
+                'raw_data_rounding_decimal_places', np.nan
+            ),
             'OOB_Status': oob_status,
             'baseline_insufficient': baseline_insufficient,  # 新增標記，供後續使用
             'baseline_empty': baseline_empty  # 新增標記，記錄基線是否為空
             # 可以考慮添加 actual_baseline_start_date 到結果中，用於記錄實際使用的基線範圍
             # 'Actual_Baseline_Start': actual_baseline_start_date
         }
+        result.update(calculate_oos_statistics(weekly_data, chart_info))
+        result['ooc_rate'] = (
+            float(result['ooc_cnt']) / float(result['data_cnt'])
+            if result['data_cnt'] else np.nan
+        )
+        result.update(build_oob_audit_statistics(
+            weekly_data['point_val'],
+            baseline_data['point_val'] if not baseline_empty else [],
+            kshift_results,
+            weekly_start_date,
+            weekly_end_date,
+            actual_baseline_start_date,
+            baseline_end_date,
+        ))
         print("--- 外部 process_single_chart 函數成功退出 ---")
         return result
 
@@ -2372,20 +2651,22 @@ def precompute_weekly_rule_results(raw_df, chart_info, weekly_start_date, weekly
 
 
 def plot_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date, debug=False,
-                   precomputed_rule_results=None, use_batch_id_labels=False):
+                   precomputed_rule_results=None, use_batch_id_labels=False,
+                   chart_summary=None):
     configure_matplotlib_font()
     import os
     import numpy as np
     import matplotlib.pyplot as plt
     import pandas as pd
 
-    plt.figure(figsize=(14, 6))
+    figure = plt.figure(figsize=(13, 3.5))
 
     group_name = chart_info['group_name']
     display_group_name = "" if group_name == "Default" else f"Group: [{group_name}]"
     title = (f"{display_group_name}[{chart_info['chart_name']}][{chart_info['Characteristics']}]\n"
              f"UCL: [{chart_info['UCL']}] | Target: [{chart_info['Target']}] | LCL: [{chart_info['LCL']}]")
-    plt.title(title, loc='left', fontsize=12)
+    plt.title(title, loc='left', fontsize=9)
+    add_oob_statistics_header(figure, chart_summary)
 
     # === 先排序 + reset_index，確保 index = 0..N-1 ===
     raw_df = raw_df.copy()
@@ -2457,20 +2738,20 @@ def plot_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date, debug
     ax.spines['right'].set_visible(False)
     ax.spines['top'].set_visible(False)
 
-    plt.tight_layout()
+    figure.tight_layout(rect=[0.02, 0.02, 0.98, 0.68])
 
     output_path = 'output'
     os.makedirs(output_path, exist_ok=True)
     safe_group_name = "" if group_name == "Default" else group_name
     image_path = f"{output_path}/SPC_{safe_group_name}_{chart_info['chart_name']}.png"
 
-    plt.savefig(image_path, bbox_inches='tight')
-    plt.close()
+    figure.savefig(image_path, bbox_inches='tight', bbox_extra_artists=figure.texts)
+    plt.close(figure)
 
     return image_path, violated_rules
 def plot_spc_chart_interactive(raw_df, chart_info, weekly_start_date, weekly_end_date,
                                record_results=None, debug=False, use_batch_id_labels=False,
-                               precomputed_rule_results=None):
+                               precomputed_rule_results=None, chart_summary=None):
     """
     建立互動式 SPC 圖表，返回 FigureCanvas 而不是儲存圖片
     支援滑鼠懸停 tooltip 顯示時間、數值、WE rule 資訊、Record High/Low 資訊
@@ -2485,7 +2766,7 @@ def plot_spc_chart_interactive(raw_df, chart_info, weekly_start_date, weekly_end
     from matplotlib.figure import Figure
     
     # 創建 Figure 物件
-    fig = Figure(figsize=(13, 2.5))
+    fig = Figure(figsize=(13, 3.5))
     ax = fig.add_subplot(111)
 
     group_name = chart_info['group_name']
@@ -2493,6 +2774,7 @@ def plot_spc_chart_interactive(raw_df, chart_info, weekly_start_date, weekly_end
     title = (f"{display_group_name}[{chart_info['chart_name']}][{chart_info['Characteristics']}]\n"
              f"UCL: [{chart_info['UCL']}] | Target: [{chart_info['Target']}] | LCL: [{chart_info['LCL']}]")
     ax.set_title(title, loc='left', fontsize=9)  # 原12 → 9
+    add_oob_statistics_header(fig, chart_summary)
 
     # === 先排序 + reset_index，確保 index = 0..N-1 ===
     raw_df = raw_df.copy()
@@ -2630,8 +2912,8 @@ def plot_spc_chart_interactive(raw_df, chart_info, weekly_start_date, weekly_end
     ax.spines['right'].set_visible(False)
     ax.spines['top'].set_visible(False)
 
-    fig.tight_layout()
-    fig.subplots_adjust(left=0.08, right=0.95)  # 讓y軸數字和右側標籤不會被裁切
+    fig.tight_layout(rect=[0.02, 0.02, 0.98, 0.68])
+    fig.subplots_adjust(left=0.08, right=0.95)
 
 
 
@@ -2641,6 +2923,7 @@ def plot_spc_chart_interactive(raw_df, chart_info, weekly_start_date, weekly_end
     try:
         canvas._plot_args = (raw_df.copy(), chart_info.copy(), weekly_start_date, weekly_end_date, use_batch_id_labels)
         canvas._plot_kind = 'spc'
+        canvas._chart_summary = dict(chart_summary or {})
     except Exception:
         canvas._plot_args = None
         canvas._plot_kind = None
@@ -2763,7 +3046,7 @@ def plot_spc_chart_interactive(raw_df, chart_info, weekly_start_date, weekly_end
 
 def plot_weekly_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date,
                           debug=False, precomputed_rule_results=None,
-                          use_batch_id_labels=False):
+                          use_batch_id_labels=False, chart_summary=None):
     configure_matplotlib_font()
     import os
     import numpy as np
@@ -2783,7 +3066,7 @@ def plot_weekly_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date
 
     if df_weekly.empty:
         # 若當週沒有資料，仍畫一張空圖以避免例外
-        plt.figure(figsize=(14, 6))
+        plt.figure(figsize=(13, 3.5))
         plt.title("No weekly data", loc='left')
         plt.tight_layout()
         output_path = 'output'
@@ -2799,13 +3082,14 @@ def plot_weekly_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date
     points_num = len(df_weekly)
     x_values = np.arange(points_num)
 
-    plt.figure(figsize=(14, 6))
+    figure = plt.figure(figsize=(13, 3.5))
 
     group_name = chart_info.get('group_name', '')
     display_group_name = "" if group_name == "Default" else f"Group: [{group_name}]"
     title = (f"{display_group_name}[{chart_info['chart_name']}][{chart_info['Characteristics']}]\n"
              f"UCL: [{chart_info['UCL']}] | Target: [{chart_info['Target']}] | LCL: [{chart_info['LCL']}]")
-    plt.title(title, loc='left', fontsize=12)
+    plt.title(title, loc='left', fontsize=9)
+    add_oob_statistics_header(figure, chart_summary)
 
     # 繪製控制線（使用 weekly 範圍作為長度參考）
     draw_horizontal_limit(plt, chart_info.get('UCL'), 'UCL', -0.8, points_num + 2)
@@ -2852,14 +3136,14 @@ def plot_weekly_spc_chart(raw_df, chart_info, weekly_start_date, weekly_end_date
     ax.spines['right'].set_visible(False)
     ax.spines['top'].set_visible(False)
 
-    plt.tight_layout()
+    figure.tight_layout(rect=[0.02, 0.02, 0.98, 0.68])
 
     output_path = 'output'
     os.makedirs(output_path, exist_ok=True)
     safe_group_name = "" if group_name == "Default" else group_name
     image_path = f'{output_path}/Weekly_SPC_{safe_group_name}_{chart_info["chart_name"]}.png'
-    plt.savefig(image_path, bbox_inches='tight')
-    plt.close()
+    figure.savefig(image_path, bbox_inches='tight', bbox_extra_artists=figure.texts)
+    plt.close(figure)
 
     # 回傳圖片路徑（如需，也可以回傳 violated_points 供 debug 使用）
     return image_path
@@ -3080,7 +3364,7 @@ def plot_spc_by_customer_time_grouping(raw_df, chart_info, weekly_start_date=Non
 def plot_weekly_spc_chart_interactive(raw_df, chart_info, weekly_start_date, weekly_end_date,
                                       record_results=None, debug=False,
                                       use_batch_id_labels=False,
-                                      precomputed_rule_results=None):
+                                      precomputed_rule_results=None, chart_summary=None):
     """
     建立互動式 Weekly SPC 圖表，返回 FigureCanvas 而不是儲存圖片
     支援滑鼠懸停 tooltip 顯示時間、數值、WE rule 資訊
@@ -3093,7 +3377,7 @@ def plot_weekly_spc_chart_interactive(raw_df, chart_info, weekly_start_date, wee
     from matplotlib.figure import Figure
 
     # 創建 Figure 物件
-    fig = Figure(figsize=(13, 2.5))
+    fig = Figure(figsize=(13, 3.5))
     ax = fig.add_subplot(111)
 
     # work on a local copy，確保 point_time 是 datetime，並依時間排序、重設 index（得到連續的 global index）
@@ -3125,6 +3409,7 @@ def plot_weekly_spc_chart_interactive(raw_df, chart_info, weekly_start_date, wee
     title = (f"{display_group_name}[{chart_info['chart_name']}][{chart_info['Characteristics']}]\n"
              f"UCL: [{chart_info['UCL']}] | Target: [{chart_info['Target']}] | LCL: [{chart_info['LCL']}]")
     ax.set_title(title, loc='left', fontsize=9)
+    add_oob_statistics_header(fig, chart_summary)
 
     # 繪製控制線（使用 weekly 範圍作為長度參考）
     draw_horizontal_limit(ax, chart_info.get('UCL'), 'UCL', -0.8, points_num + 2, fontsize=7)
@@ -3222,8 +3507,8 @@ def plot_weekly_spc_chart_interactive(raw_df, chart_info, weekly_start_date, wee
     ax.spines['right'].set_visible(False)
     ax.spines['top'].set_visible(False)
 
-    fig.tight_layout()
-    fig.subplots_adjust(left=0.08, right=0.95)  # 讓y軸數字和右側標籤不會被裁切
+    fig.tight_layout(rect=[0.02, 0.02, 0.98, 0.68])
+    fig.subplots_adjust(left=0.08, right=0.95)
 
     # === 創建 FigureCanvas ===
     canvas = FigureCanvas(fig)
@@ -3231,6 +3516,7 @@ def plot_weekly_spc_chart_interactive(raw_df, chart_info, weekly_start_date, wee
     try:
         canvas._plot_args = (df_weekly.copy(), chart_info.copy(), weekly_start_date, weekly_end_date, use_batch_id_labels)
         canvas._plot_kind = 'weekly'
+        canvas._chart_summary = dict(chart_summary or {})
     except Exception:
         canvas._plot_args = None
         canvas._plot_kind = None
@@ -3985,6 +4271,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
             'show_by_tool_charts': False,
             'show_by_customer_charts': False,
             'enable_record_high_low': False,
+            'round_raw_data_by_resolution': False,
             'custom_time_range_enabled': False,
             'start_time': QtCore.QDateTime.currentDateTime().addDays(-30),
             'end_time': QtCore.QDateTime.currentDateTime()
@@ -5505,7 +5792,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         try:
             if filepath not in self.csv_cache:
                 print(f"  - 讀取並快取 CSV: {os.path.basename(filepath)}")
-                df = pd.read_csv(filepath)
+                df = read_raw_data(filepath)
                 self.csv_cache[filepath] = df
             else:
                 print(f"  - 使用快取的 CSV: {os.path.basename(filepath)}")
@@ -5606,7 +5893,13 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                                 raw_df['point_time'] = pd.to_datetime(raw_df['point_time'], errors='coerce')
                                 raw_df.dropna(subset=['point_time'], inplace=True)
 
-                            is_successful, processed_df, updated_chart_info = preprocess_data(chart_info, raw_df)
+                            is_successful, processed_df, updated_chart_info = preprocess_data(
+                                chart_info,
+                                raw_df,
+                                round_raw_data_by_resolution=self.oob_settings.get(
+                                    'round_raw_data_by_resolution', False
+                                ),
+                            )
 
                             if not is_successful or processed_df is None or processed_df.empty:
                                 print(f"[Info] 圖表 {group_name}/{chart_name} 預處理失敗或資料為空，跳過。")
@@ -5849,7 +6142,8 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
             chart_name = str(getattr(chart_info, 'ChartName'))
             chart_key = f"{group_name}_{chart_name}"
             pattern = re.compile(
-                rf"{re.escape(group_name)}_{re.escape(chart_name)}(?:_\d+_\d+)?\.csv$"
+                rf"{re.escape(group_name)}_{re.escape(chart_name)}(?:_\d+_\d+)?(?:\.csv|\.xlsx|\.xls|\.xlsm|\.xlsb)$",
+                re.IGNORECASE,
             )
             filename = next((name for name in filenames if pattern.match(name)), None)
             file_map[chart_key] = (
@@ -5889,7 +6183,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
             if filepath and os.path.exists(filepath) and filepath not in processed_files:
                 try:
                     # 完整 CSV 僅讀取一次並留在快取；類型判斷仍只使用前 1000 筆。
-                    full_df = pd.read_csv(filepath)
+                    full_df = read_raw_data(filepath)
                     self.csv_cache[filepath] = full_df
                     raw_df = full_df.head(1000)
                     customer_result = self.filter_customer_data(raw_df, os.path.basename(filepath))
@@ -5928,7 +6222,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         """
         if filepath not in self.csv_cache:
             try:
-                self.csv_cache[filepath] = pd.read_csv(filepath)
+                self.csv_cache[filepath] = read_raw_data(filepath)
                 print(f"  CSV 文件已快取: {os.path.basename(filepath)}")
             except Exception as e:
                 print(f"  CSV 讀取錯誤 {filepath}: {e}")
@@ -6031,26 +6325,35 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                 'record_high': result.get('record_high', False),
                 'record_low': result.get('record_low', False)
             }
-            rule_results = precompute_weekly_rule_results(
+            chart_raw_df = prepare_oob_chart_data(
                 raw_df, chart_info, weekly_start_date, weekly_end_date
             )
+            rule_results = precompute_weekly_rule_results(
+                chart_raw_df, chart_info, weekly_start_date, weekly_end_date
+            )
+            weekly_data = raw_df[(raw_df['point_time'] >= weekly_start_date) &
+                                 (raw_df['point_time'] <= weekly_end_date)].copy()
+            cpk_result = calculate_cpk(weekly_data, chart_info)
+            result['Cpk'] = cpk_result.get('Cpk', np.nan) if cpk_result else np.nan
             
             if use_interactive_charts:
                 # 生成互動式 SPC 圖表（返回 FigureCanvas）
                 spc_canvas, violated_rules = plot_spc_chart_interactive(
-                    raw_df, chart_info, weekly_start_date, weekly_end_date,
+                    chart_raw_df, chart_info, weekly_start_date, weekly_end_date,
                     record_results=record_results,
                     use_batch_id_labels=use_batch_id_labels,
                     precomputed_rule_results=rule_results,
+                    chart_summary=result,
                 )
                 print(f" - analyze_chart: plot_spc_chart_interactive 完成")
 
                 # 生成互動式週圖表（返回 FigureCanvas）
                 weekly_canvas = plot_weekly_spc_chart_interactive(
-                    raw_df, chart_info, weekly_start_date, weekly_end_date,
+                    chart_raw_df, chart_info, weekly_start_date, weekly_end_date,
                     record_results=record_results,
                     use_batch_id_labels=use_batch_id_labels,
                     precomputed_rule_results=rule_results,
+                    chart_summary=result,
                 )
                 print(f" - analyze_chart: plot_weekly_spc_chart_interactive 完成")
                 
@@ -6066,17 +6369,19 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
             else:
                 # 生成靜態 SPC 圖表
                 image_path, violated_rules = plot_spc_chart(
-                    raw_df, chart_info, weekly_start_date, weekly_end_date,
+                    chart_raw_df, chart_info, weekly_start_date, weekly_end_date,
                     precomputed_rule_results=rule_results,
                     use_batch_id_labels=use_batch_id_labels,
+                    chart_summary=result,
                 )
                 print(f" - analyze_chart: plot_spc_chart 完成，image_path: {image_path}")
 
                 # 生成靜態週圖表
                 weekly_image_path = plot_weekly_spc_chart(
-                    raw_df, chart_info, weekly_start_date, weekly_end_date,
+                    chart_raw_df, chart_info, weekly_start_date, weekly_end_date,
                     precomputed_rule_results=rule_results,
                     use_batch_id_labels=use_batch_id_labels,
+                    chart_summary=result,
                 )
                 print(f" - analyze_chart: plot_weekly_spc_chart 完成，weekly_image_path: {weekly_image_path}")
 
@@ -6094,10 +6399,10 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                 # By Tool 圖僅影響顯示，不改變既有 OOB／SPC 計算結果。
                 try:
                     result['by_tool_time_canvas'] = plot_spc_by_tool_time(
-                        raw_df, chart_info, weekly_start_date, weekly_end_date
+                        chart_raw_df, chart_info, weekly_start_date, weekly_end_date
                     )
                     result['by_tool_group_canvas'] = plot_spc_by_tool_time_grouping(
-                        raw_df, chart_info, weekly_start_date, weekly_end_date
+                        chart_raw_df, chart_info, weekly_start_date, weekly_end_date
                     )
                     result['by_tool_time_path'] = save_canvas_figure(
                         result['by_tool_time_canvas'], chart_info, 'ByTool_Time'
@@ -6113,10 +6418,10 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                 # By Customer 圖僅影響顯示，不改變既有 OOB／SPC 計算結果。
                 try:
                     result['by_customer_time_canvas'] = plot_spc_by_customer_time(
-                        raw_df, chart_info, weekly_start_date, weekly_end_date
+                        chart_raw_df, chart_info, weekly_start_date, weekly_end_date
                     )
                     result['by_customer_group_canvas'] = plot_spc_by_customer_time_grouping(
-                        raw_df, chart_info, weekly_start_date, weekly_end_date
+                        chart_raw_df, chart_info, weekly_start_date, weekly_end_date
                     )
                     result['by_customer_time_path'] = save_canvas_figure(
                         result['by_customer_time_canvas'], chart_info, 'ByCustomer_Time'
@@ -6153,6 +6458,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
             # === 基線範圍選擇邏輯 ===
             baseline_data_one_year = raw_df[(raw_df['point_time'] >= initial_baseline_start_date) & 
                                           (raw_df['point_time'] <= baseline_end_date)].copy()
+            baseline_data_one_year = exclude_oos_data(baseline_data_one_year, chart_info)
             baseline_count_one_year = len(baseline_data_one_year)
             print(f" - _process_discrete_chart: 初始一年基線數據點數量: {baseline_count_one_year}")
 
@@ -6163,6 +6469,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                 
                 baseline_data_two_year = raw_df[(raw_df['point_time'] >= actual_baseline_start_date) & 
                                               (raw_df['point_time'] <= baseline_end_date)].copy()
+                baseline_data_two_year = exclude_oos_data(baseline_data_two_year, chart_info)
                 baseline_count_two_year = len(baseline_data_two_year)
                 
                 if baseline_count_two_year < 10:
@@ -6174,6 +6481,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
             # 篩選最終數據
             baseline_data = raw_df[(raw_df['point_time'] >= actual_baseline_start_date) & 
                                  (raw_df['point_time'] <= baseline_end_date)].copy()
+            baseline_data = exclude_oos_data(baseline_data, chart_info)
             weekly_data = raw_df[(raw_df['point_time'] >= weekly_start_date) & 
                                (raw_df['point_time'] <= weekly_end_date)].copy()
 
@@ -6185,6 +6493,10 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
             if weekly_data.empty:
                 print(f" - _process_discrete_chart: 週數據為空，跳過處理")
                 return None
+
+            analysis_raw_df = prepare_oob_chart_data(
+                raw_df, chart_info, weekly_start_date, weekly_end_date
+            )
 
             # === 計算統計數據 ===
             def calculate_statistics(data):
@@ -6227,11 +6539,16 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                 'LCL': chart_info.get('LCL', 'N/A'),
                 'Target': chart_info.get('Target', 'N/A'),
                 'Resolution': chart_info.get('Resolution', 'N/A'),
+                'raw_data_rounding_enabled': chart_info.get('raw_data_rounding_enabled', False),
+                'raw_data_rounding_decimal_places': chart_info.get(
+                    'raw_data_rounding_decimal_places', np.nan
+                ),
                 'OOB_Status': OOB_CALCULATED,
                 'baseline_insufficient': baseline_insufficient,
                 'baseline_empty': baseline_empty,  # 新增標記
                 'data_type': 'discrete'
             }
+            audit_kshift_results = unavailable_kshift_result(OOB_INSUFFICIENT_DATA)
 
             # OOC 只依賴當週資料與控制線，不應被 Baseline 是否足夠影響。
             print(" - _process_discrete_chart: 計算 OOC...")
@@ -6256,9 +6573,10 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                 print(" - _process_discrete_chart: 計算離散型 OOB...")
                 discrete_oob_result = discrete_oob_calculator(
                     base_data_dict, weekly_data_dict, chart_info,
-                    raw_df, weekly_start_date, weekly_end_date,
+                    analysis_raw_df, weekly_start_date, weekly_end_date,
                     actual_baseline_start_date, baseline_end_date
                 )
+                audit_kshift_results = discrete_oob_result
                 
                 # === Record High Low 計算（可選，預設關閉）===
                 if record_high_low_enabled:
@@ -6284,6 +6602,8 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                     'record_high': record_results.get('record_high', False),
                     'record_low': record_results.get('record_low', False)
                 })
+                for key in KSHIFT_AUDIT_KEYS:
+                    result[key] = discrete_oob_result.get(key, np.nan)
                 
                 print(f" - _process_discrete_chart: 離散型 OOB 計算完成")
                 
@@ -6307,6 +6627,21 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                     'OOB_Status': OOB_ERROR if ooc_highlight == OOB_ERROR else OOB_INSUFFICIENT_DATA,
                 })
                 print(f" - _process_discrete_chart: 基線數據不足，Baseline 指標設為 INSUFFICIENT_DATA，OOC 已獨立計算")
+
+            result.update(calculate_oos_statistics(weekly_data, chart_info))
+            result['ooc_rate'] = (
+                float(result['ooc_cnt']) / float(result['data_cnt'])
+                if result['data_cnt'] else np.nan
+            )
+            result.update(build_oob_audit_statistics(
+                weekly_data['point_val'],
+                baseline_data['point_val'] if not baseline_empty else [],
+                audit_kshift_results,
+                weekly_start_date,
+                weekly_end_date,
+                actual_baseline_start_date,
+                baseline_end_date,
+            ))
 
             if result.get('OOB_Status') != OOB_ERROR:
                 metric_states = [result.get(key) for key in OOB_KEYS]
@@ -6388,12 +6723,27 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
         results_df = pd.DataFrame(self.results)
 
         # 確保所有預期的列都存在，包括新增的數據類型欄位
-        expected_cols = ['data_cnt', 'ooc_cnt', 'WE_Rule', 'OOB_Rule', 'OOB_Status', 'data_type', 'Material_no',
+        expected_cols = ['data_cnt', 'ooc_cnt', 'oos_cnt', 'oos_high_cnt', 'oos_low_cnt',
+                         'oos_rate', 'WE_Rule', 'OOB_Rule', 'OOB_Status', 'data_type', 'Material_no',
                          'group_name', 'chart_name', 'chart_ID', 'Characteristics',
                          'USL', 'LSL', 'UCL', 'LCL', 'Target', 'Cpk', 'Resolution',
+                         'raw_data_rounding_enabled', 'raw_data_rounding_decimal_places',
                          'baseline_insufficient', 'baseline_empty',
                          'HL_record_high_low', 'record_high', 'record_low',
                          'chart_path', 'weekly_chart_path']
+        audit_cols = [
+            'weekly_start', 'weekly_end', 'weekly_n', 'weekly_mean', 'weekly_sigma',
+            'weekly_p05', 'weekly_p50', 'weekly_p95',
+            'baseline_start', 'baseline_end', 'baseline_n', 'baseline_mean', 'baseline_sigma',
+            'baseline_p05', 'baseline_p50', 'baseline_p95',
+            'ooc_rate', 'k_source',
+            'weekly_k_p95', 'weekly_k_p95_abs', 'weekly_k_p50', 'weekly_k_p50_abs',
+            'weekly_k_p05', 'weekly_k_p05_abs',
+            'rolling_k_p95', 'rolling_k_p95_abs', 'rolling_k_p50', 'rolling_k_p50_abs',
+            'rolling_k_p05', 'rolling_k_p05_abs',
+            'k_p95', 'k_p95_abs', 'k_p50', 'k_p50_abs', 'k_p05', 'k_p05_abs',
+        ]
+        expected_cols.extend(audit_cols)
         optional_chart_path_cols = [
             'by_tool_time_path', 'by_tool_group_path',
             'by_customer_time_path', 'by_customer_group_path',
@@ -6614,6 +6964,7 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
             if getattr(canvas, '_plot_args', None) and getattr(canvas, '_plot_kind', None):
                 args = canvas._plot_args
                 kind = canvas._plot_kind
+                chart_summary_arg = getattr(canvas, '_chart_summary', None)
                 
                 # 支援舊格式（4個參數）和新格式（5個參數）
                 if len(args) >= 5:
@@ -6625,12 +6976,20 @@ class SPCApp(QtWidgets.QMainWindow): # 將 QTabWidget 改為 QMainWindow
                 if kind == 'spc':
                     # plot_spc_chart_interactive 返回 (canvas, violated_rules)
                     try:
-                        new_canvas, _ = plot_spc_chart_interactive(raw_df_arg, chart_info_arg, ws_arg, we_arg, use_batch_id_labels=use_batch_id_arg)
+                        new_canvas, _ = plot_spc_chart_interactive(
+                            raw_df_arg, chart_info_arg, ws_arg, we_arg,
+                            use_batch_id_labels=use_batch_id_arg,
+                            chart_summary=chart_summary_arg,
+                        )
                     except Exception:
                         new_canvas = None
                 elif kind == 'weekly':
                     try:
-                        new_canvas = plot_weekly_spc_chart_interactive(raw_df_arg, chart_info_arg, ws_arg, we_arg, use_batch_id_labels=use_batch_id_arg)
+                        new_canvas = plot_weekly_spc_chart_interactive(
+                            raw_df_arg, chart_info_arg, ws_arg, we_arg,
+                            use_batch_id_labels=use_batch_id_arg,
+                            chart_summary=chart_summary_arg,
+                        )
                     except Exception:
                         new_canvas = None
                 elif kind == 'spc_by_tool_time':

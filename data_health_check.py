@@ -7,6 +7,7 @@ from PyQt6 import QtWidgets, QtGui, QtCore
 from PyQt6.QtCore import Qt
 from difflib import SequenceMatcher
 from translations import tr, get_translator
+from raw_data_io import find_raw_data_file_by_prefix, read_raw_data
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,9 @@ class DataValidatorWorker(QtCore.QThread):
         :return: 找到的檔案完整路徑，如果沒找到返回 None
         """
         try:
+            matched_path = find_raw_data_file_by_prefix(directory, prefix)
+            if matched_path:
+                return matched_path
             if not os.path.exists(directory):
                 return None
             
@@ -308,7 +312,7 @@ class DataValidatorWorker(QtCore.QThread):
                             print(f"  [DEBUG] 找到匹配檔案: {actual_filename} (前綴: {csv_prefix})")
                             
                             # 加入超時保護：只讀取前5行進行驗證
-                            df_csv = pd.read_csv(found_file, nrows=5)
+                            df_csv = read_raw_data(found_file, nrows=5)
                             
                             if df_csv.empty:
                                 self.emit_log("Unable to Execute", f"CSV ({chart_id})", "Empty CSV file", "CSV file is empty.", found_file, source="CSV")
